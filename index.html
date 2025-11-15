@@ -238,31 +238,52 @@
   const touchControls = document.getElementById('touch-controls');
   if (touchControls) {
     const buttons = touchControls.querySelectorAll('button[data-key]');
+    const activePointers = new Map(); // button -> Set<pointerId>
+
     buttons.forEach((btn) => {
       const key = btn.dataset.key;
+      const getPointerSet = () => {
+        let set = activePointers.get(btn);
+        if (!set) {
+          set = new Set();
+          activePointers.set(btn, set);
+        }
+        return set;
+      };
+
       const press = (e) => {
         e.preventDefault();
-        setKeyState(key, true);
-        btn.classList.add('active');
+        btn.setPointerCapture(e.pointerId);
+        const set = getPointerSet();
+        if (set.has(e.pointerId)) return;
+        const wasInactive = set.size === 0;
+        set.add(e.pointerId);
+        if (wasInactive) {
+          setKeyState(key, true);
+          btn.classList.add('active');
+        }
       };
+
       const release = (e) => {
         if (e) e.preventDefault();
-        setKeyState(key, false);
-        btn.classList.remove('active');
+        const set = activePointers.get(btn);
+        if (!set) return;
+        if (e && set.has(e.pointerId)) {
+          set.delete(e.pointerId);
+        } else if (!e) {
+          set.clear();
+        }
+        if (set.size === 0) {
+          activePointers.delete(btn);
+          setKeyState(key, false);
+          btn.classList.remove('active');
+        }
       };
+
       btn.addEventListener('pointerdown', press);
       btn.addEventListener('pointerup', release);
-      btn.addEventListener('pointerleave', release);
       btn.addEventListener('pointercancel', release);
-    });
-    // Ensure keys release if pointer leaves the browser viewport
-    window.addEventListener('pointerup', () => {
-      buttons.forEach((btn) => {
-        if (btn.classList.contains('active')) {
-          btn.classList.remove('active');
-          setKeyState(btn.dataset.key, false);
-        }
-      });
+      btn.addEventListener('lostpointercapture', release);
     });
   }
 
