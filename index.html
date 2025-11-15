@@ -56,6 +56,8 @@
       text-transform: uppercase;
       box-shadow: inset 0 2px 0 rgba(255,255,255,0.05);
       transition: transform 0.1s ease, background 0.1s ease;
+      user-select: none;
+      -webkit-user-select: none;
     }
     #touch-controls button:active,
     #touch-controls button.active {
@@ -220,6 +222,36 @@
     k: false
   };
 
+  const activePointers = new Map();
+
+  // Release buttons that still track a pointer id or clear a specific button entirely.
+  function releasePointerFromButtons(pointerId, specificButton) {
+    // Iterate over each button that still has one or more active pointers.
+    for (const [btn, set] of activePointers.entries()) {
+      // Skip buttons that don't match the requested target.
+      if (specificButton && btn !== specificButton) continue;
+      // Skip buttons that do not contain the pointer we are clearing.
+      if (pointerId !== undefined && !set.has(pointerId)) continue;
+
+      // Drop the specific pointer id or clear the entire button when no id is provided.
+      if (pointerId !== undefined) {
+        set.delete(pointerId);
+      } else {
+        set.clear();
+      }
+
+      // Release the button entirely once no pointers remain associated with it.
+      if (set.size === 0) {
+        activePointers.delete(btn);
+        setKeyState(btn.dataset.key, false);
+        btn.classList.remove('active');
+      }
+
+      // Exit early after clearing a matching button or pointer id to avoid extra work.
+      if (specificButton || pointerId !== undefined) break;
+    }
+  }
+
   // Update the stored pressed state for a given virtual key.
   function setKeyState(key, pressed) {
     // Only update keys that are actually tracked to ignore stray inputs.
@@ -277,34 +309,25 @@
       const release = (e) => {
         // Guard against synthetic releases without a pointer event object.
         if (e) e.preventDefault();
-        const set = activePointers.get(btn);
-        if (!set) return;
-        if (e && set.has(e.pointerId)) {
-          set.delete(e.pointerId);
-        } else if (!e) {
-          set.clear();
-        }
-        if (set.size === 0) {
-          activePointers.delete(btn);
-          setKeyState(key, false);
-          btn.classList.remove('active');
-        }
+        releasePointerFromButtons(e ? e.pointerId : undefined, btn);
       };
 
       btn.addEventListener('pointerdown', press);
       btn.addEventListener('pointerup', release);
       btn.addEventListener('pointercancel', release);
     });
-    // Ensure keys release if pointer leaves the browser viewport
-    window.addEventListener('pointerup', () => {
-      // Sweep all buttons any time a pointer ends to clear lingering presses.
-      buttons.forEach((btn) => {
-        // Release any button that still appears pressed to avoid sticky inputs.
-        if (btn.classList.contains('active')) {
-          btn.classList.remove('active');
-          setKeyState(btn.dataset.key, false);
-        }
-      });
+    // Ensure keys release if pointer leaves the browser viewport entirely.
+    window.addEventListener('pointerup', (e) => {
+      // Release whichever button was tracking this pointer id.
+      releasePointerFromButtons(e.pointerId);
+    });
+    window.addEventListener('pointercancel', (e) => {
+      // Release any button associated with a cancelled pointer gesture.
+      releasePointerFromButtons(e.pointerId);
+    });
+    window.addEventListener('blur', () => {
+      // Clear every button when the tab loses focus to avoid stuck inputs.
+      releasePointerFromButtons();
     });
   }
 
