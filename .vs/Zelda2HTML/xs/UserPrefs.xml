@@ -1,0 +1,22 @@
+﻿<Properties StartupConfiguration="{06E0F5A6-31D4-404B-A8AD-DF9B2B8052BA}|https">
+  <MultiItemStartupConfigurations />
+  <MonoDevelop.Ide.DebuggingService.PinnedWatches />
+  <MonoDevelop.Ide.DebuggingService.Breakpoints>
+    <BreakpointStore />
+  </MonoDevelop.Ide.DebuggingService.Breakpoints>
+  <MonoDevelop.Ide.ItemProperties.Zelda2HTML PreferredExecutionTarget="/Applications/ChatGPT Atlas.app" />
+  <MonoDevelop.Ide.Workbench>
+    <Pads>
+      <Pad Id="ClassPad">
+        <State name="__root__">
+          <Node name="Zelda2HTML" expanded="True">
+            <Node name="Zelda2HTML" expanded="True">
+              <Node name="Program" expanded="True" selected="True" />
+            </Node>
+          </Node>
+        </State>
+      </Pad>
+    </Pads>
+  </MonoDevelop.Ide.Workbench>
+  <MonoDevelop.Ide.Workspace ActiveConfiguration="Debug" />
+</Properties>

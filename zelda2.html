@@ -31,6 +31,73 @@
       font-family: monospace;
       font-size: 12px;
     }
+    #touch-controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 24px;
+      margin: 18px auto 32px;
+      max-width: 520px;
+      padding: 0 16px;
+      user-select: none;
+      touch-action: manipulation;
+    }
+    #touch-controls button {
+      width: 64px;
+      height: 64px;
+      border-radius: 14px;
+      border: 2px solid #555;
+      background: #1d1d2e;
+      color: #eee;
+      font-size: 18px;
+      font-weight: 600;
+      text-transform: uppercase;
+      box-shadow: inset 0 2px 0 rgba(255,255,255,0.05);
+      transition: transform 0.1s ease, background 0.1s ease;
+    }
+    #touch-controls button:active,
+    #touch-controls button.active {
+      background: #353562;
+      transform: translateY(2px);
+    }
+    #touch-controls .dpad {
+      display: grid;
+      grid-template-columns: repeat(3, 64px);
+      grid-template-rows: repeat(3, 64px);
+      gap: 8px;
+    }
+    #touch-controls .dpad button {
+      font-size: 20px;
+    }
+    #touch-controls .dpad button.empty {
+      visibility: hidden;
+      pointer-events: none;
+    }
+    #touch-controls .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #touch-controls .actions button {
+      width: 88px;
+    }
+    @media (max-width: 480px) {
+      #touch-controls {
+        gap: 16px;
+      }
+      #touch-controls button {
+        width: 56px;
+        height: 56px;
+      }
+      #touch-controls .dpad {
+        grid-template-columns: repeat(3, 56px);
+        grid-template-rows: repeat(3, 56px);
+      }
+      #touch-controls .actions button {
+        width: 72px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -40,6 +107,23 @@
   <kbd>W</kbd>/<kbd>A</kbd>/<kbd>S</kbd>/<kbd>D</kbd> move &amp; crouch,
   <kbd>K</kbd> jump,
   <kbd>J</kbd> stab
+</div>
+<div id="touch-controls">
+  <div class="dpad">
+    <button class="empty" tabindex="-1" aria-hidden="true"></button>
+    <button data-key="w" aria-label="Up">▲</button>
+    <button class="empty" tabindex="-1" aria-hidden="true"></button>
+    <button data-key="a" aria-label="Left">◀</button>
+    <button data-key="s" aria-label="Down">▼</button>
+    <button data-key="d" aria-label="Right">▶</button>
+    <button class="empty" tabindex="-1" aria-hidden="true"></button>
+    <button class="empty" tabindex="-1" aria-hidden="true"></button>
+    <button class="empty" tabindex="-1" aria-hidden="true"></button>
+  </div>
+  <div class="actions">
+    <button data-key="j">Stab</button>
+    <button data-key="k">Jump</button>
+  </div>
 </div>
 
 <script>
@@ -130,6 +214,12 @@
     k: false
   };
 
+  function setKeyState(key, pressed) {
+    if (key in keys) {
+      keys[key] = pressed;
+    }
+  }
+
   window.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
     if (k in keys) {
@@ -144,6 +234,37 @@
       e.preventDefault();
     }
   });
+
+  const touchControls = document.getElementById('touch-controls');
+  if (touchControls) {
+    const buttons = touchControls.querySelectorAll('button[data-key]');
+    buttons.forEach((btn) => {
+      const key = btn.dataset.key;
+      const press = (e) => {
+        e.preventDefault();
+        setKeyState(key, true);
+        btn.classList.add('active');
+      };
+      const release = (e) => {
+        if (e) e.preventDefault();
+        setKeyState(key, false);
+        btn.classList.remove('active');
+      };
+      btn.addEventListener('pointerdown', press);
+      btn.addEventListener('pointerup', release);
+      btn.addEventListener('pointerleave', release);
+      btn.addEventListener('pointercancel', release);
+    });
+    // Ensure keys release if pointer leaves the browser viewport
+    window.addEventListener('pointerup', () => {
+      buttons.forEach((btn) => {
+        if (btn.classList.contains('active')) {
+          btn.classList.remove('active');
+          setKeyState(btn.dataset.key, false);
+        }
+      });
+    });
+  }
 
   function tileAtPixel(x, y) {
     const tx = Math.floor(x / TILE_SIZE);
