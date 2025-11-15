@@ -366,8 +366,8 @@
       // Track whether the current sword swing already bounced off Link's shield.
       blockedThisSwing: false,
       // Distance control helpers so the knight can shuffle around Link.
-      desiredRange: TILE_SIZE * 1.2,
-      shuffleAmplitude: TILE_SIZE * 0.6,
+      desiredRange: TILE_SIZE * 1.6,
+      shuffleAmplitude: TILE_SIZE * 0.4,
       shufflePeriod: 150,
       engageRange: TILE_SIZE * 6,
       walkSpeed: 0.9,
@@ -564,6 +564,139 @@
       e.preventDefault();
     }
   });
+
+  // Track the most recently used gamepad so we can poll it each frame.
+  const gamepadState = {
+    activeIndex: null,
+    lastId: '',
+    deadZone: 0.2,
+    hasConnected: false
+  };
+
+  // Log basic information whenever a new gamepad connects so mappings can be verified.
+  window.addEventListener('gamepadconnected', (e) => {
+    const gp = e.gamepad;
+    console.log(
+      'Gamepad connected at index %d: %s. %d buttons, %d axes.',
+      gp.index,
+      gp.id,
+      gp.buttons.length,
+      gp.axes.length
+    );
+    console.log('Gamepad mapping:', gp.mapping || '(none)');
+    gamepadState.activeIndex = gp.index;
+    gamepadState.lastId = gp.id || '';
+    gamepadState.hasConnected = true;
+  });
+
+  // Clear the active index and log a message whenever a gamepad disconnects.
+  window.addEventListener('gamepaddisconnected', (e) => {
+    const gp = e.gamepad;
+    console.log(
+      'Gamepad disconnected from index %d: %s',
+      gp.index,
+      gp.id
+    );
+    if (gamepadState.activeIndex === gp.index) {
+      gamepadState.activeIndex = null;
+    }
+  });
+
+  // Show a gentle hint if no controller is detected shortly after the game starts.
+  const infoElement = document.getElementById('info');
+  if (infoElement) {
+    setTimeout(() => {
+      // Only display the controller hint when no gamepad has ever connected.
+      if (!gamepadState.hasConnected) {
+        const hint = document.createElement('div');
+        hint.textContent = 'Connect a controller or use touch/keyboard.';
+        infoElement.appendChild(hint);
+      }
+    }, 3000);
+  }
+
+  // Read the primary gamepad and convert its raw axes/buttons into high-level actions.
+  function readGamepadActions() {
+    // Abort if the Gamepad API is not available in this browser.
+    if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') {
+      return null;
+    }
+
+    const gamepads = navigator.getGamepads();
+    if (!gamepads) return null;
+
+    let gp = null;
+
+    // Prefer the last active gamepad index while it remains connected.
+    if (gamepadState.activeIndex !== null && gamepads[gamepadState.activeIndex]) {
+      gp = gamepads[gamepadState.activeIndex];
+    }
+
+    // Fallback: scan for the first non-null gamepad slot.
+    if (!gp) {
+      for (let i = 0; i < gamepads.length; i++) {
+        // Skip empty entries so we only consider attached controllers.
+        if (gamepads[i]) {
+          gp = gamepads[i];
+          break;
+        }
+      }
+    }
+
+    // Abort when no connected gamepads are present.
+    if (!gp) return null;
+
+    gamepadState.activeIndex = gp.index;
+    gamepadState.lastId = gp.id || gamepadState.lastId;
+    gamepadState.hasConnected = true;
+
+    const axes = gp.axes || [];
+    const buttons = gp.buttons || [];
+    const deadZone = gamepadState.deadZone;
+
+    const lx = axes[0] || 0;
+    const ly = axes[1] || 0;
+
+    // Suppress minor stick noise so tiny drift does not cause unintended movement.
+    const filteredLX = Math.abs(lx) < deadZone ? 0 : lx;
+    const filteredLY = Math.abs(ly) < deadZone ? 0 : ly;
+
+    let left = filteredLX < -0.4;
+    let right = filteredLX > 0.4;
+    let down = filteredLY > 0.4;
+
+    // Blend in d-pad input so digital presses can move and crouch.
+    if (buttons[14] && buttons[14].pressed) left = true;
+    if (buttons[15] && buttons[15].pressed) right = true;
+    if (buttons[13] && buttons[13].pressed) down = true;
+
+    const btnA = buttons[0] && buttons[0].pressed;
+    const btnB = buttons[1] && buttons[1].pressed;
+    const btnX = buttons[2] && buttons[2].pressed;
+
+    // Map the south face button (A on Xbox / 8BitDo in X-Input mode) to jump.
+    const jump = !!btnA;
+    // Map X / B style buttons to sword attacks so either face button can strike.
+    const attack = !!(btnX || btnB);
+
+    return { left, right, down, jump, attack };
+  }
+
+  // Merge keyboard, touch, and gamepad sources into a single virtual key set for gameplay.
+  function combinedInputKeys() {
+    const pad = readGamepadActions();
+    // When no controller is present, fall back to the raw keyboard/touch state.
+    if (!pad) {
+      return keys;
+    }
+    return {
+      a: keys.a || pad.left,
+      d: keys.d || pad.right,
+      s: keys.s || pad.down,
+      j: keys.j || pad.attack,
+      k: keys.k || pad.jump
+    };
+  }
 
   const touchControls = document.getElementById('touch-controls');
   // Only enable touch controls if the UI is present.
@@ -911,6 +1044,8 @@
     // Determine whether Link is close enough to trigger the knight's footwork.
     const distanceToPlayer = Math.abs(playerCenter - knightCenter);
     const engaging = distanceToPlayer <= knight.engageRange;
+    // Compute the minimum safe spacing so the knight's body never willingly overlaps Link's.
+    const minBodyDistance = (player.width + knight.width) / 2 + 2;
     let walkStep = 0;
     // Only walk when not recoiling so the knockback has visible impact.
     if (engaging && knight.knockbackTimer === 0) {
@@ -918,7 +1053,8 @@
       // Shuffle forward/backward using a sine wave so the knight drifts in and out of range.
       const shufflePhase = (knight.walkTimer / knight.shufflePeriod) * Math.PI * 2;
       const shuffleOffset = Math.sin(shufflePhase) * knight.shuffleAmplitude;
-      const targetDistance = knight.desiredRange + shuffleOffset;
+      // Clamp the desired distance so the shuffle pattern never pulls the knight into body contact.
+      const targetDistance = Math.max(minBodyDistance, knight.desiredRange + shuffleOffset);
       const desiredCenter = playerCenter - knight.facing * targetDistance;
       const desiredX = desiredCenter - knight.width / 2;
       // Smoothly chase the desired position so Link can rush in before the knight reacts.
@@ -1264,12 +1400,15 @@
 
   // Handle player input, physics, combat, and reactions to damage.
   function updatePlayer() {
+    // Pull together keyboard, touch, and controller state so gameplay reads from one source.
+    const inputKeys = combinedInputKeys();
+
     // Horizontal input (used for facing even while attacking)
     let inputDir = 0;
-    // Tilt left when A is held down.
-    if (keys.a) inputDir -= 1;
-    // Tilt right when D is held down.
-    if (keys.d) inputDir += 1;
+    // Tilt left when the virtual left input is held down.
+    if (inputKeys.a) inputDir -= 1;
+    // Tilt right when the virtual right input is held down.
+    if (inputKeys.d) inputDir += 1;
 
     const lockMovement = (player.attacking && player.onGround) || player.hitTimer > 0;
     const moveX = lockMovement ? 0 : inputDir;
@@ -1279,7 +1418,7 @@
     const wasCrouching = player.crouching;
     // Allow crouch toggles only when not attacking or flinching.
     if (!player.attacking && player.hitTimer === 0) {
-      player.crouching = keys.s;
+      player.crouching = inputKeys.s;
     }
 
     // Adjust collision box when crouching / standing
@@ -1316,9 +1455,9 @@
       player.vx = moveX * player.speed;
     }
 
-    // Jump (K)
-    // Trigger a jump when K is pressed while grounded and free to move.
-    if (keys.k && player.onGround && !player.attacking && player.hitTimer === 0) {
+    // Jump (virtual K)
+    // Trigger a jump when the virtual jump button is pressed while grounded and free to move.
+    if (inputKeys.k && player.onGround && !player.attacking && player.hitTimer === 0) {
       player.vy = player.jumpSpeed;
       player.onGround = false;
     }
@@ -1367,9 +1506,9 @@
       player.vy = 0;
     }
 
-    // Attack (J) - standing or crouching allowed
-    // Start a new stab when J is pressed and Link is free to act.
-    if (keys.j && !player.attacking && player.hitTimer === 0) {
+    // Attack (virtual J) - standing or crouching allowed
+    // Start a new stab when the virtual attack button is pressed and Link is free to act.
+    if (inputKeys.j && !player.attacking && player.hitTimer === 0) {
       player.attacking = true;
       player.attackTimer = 0;
       player.blockedThisSwing = false;
