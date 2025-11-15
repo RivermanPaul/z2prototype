@@ -350,6 +350,7 @@
       y,
       width: TILE_SIZE,
       height: TILE_SIZE * 2,
+      vx: 0,
       facing: -1,
       attacking: false,
       attackTimer: 0,
@@ -361,6 +362,7 @@
       hitTimer: 0,
       shieldHigh: true,
       shieldChangeTimer: 0,
+      knockbackTimer: 0,
       get attackDuration() {
         return this.attackWindup + this.attackStab + this.attackRecover;
       }
@@ -654,7 +656,9 @@
     const swordLength = TILE_SIZE;
     const swordWidth = 4;
     const x = player.facing > 0 ? player.x + player.width : player.x - swordLength;
-    const baseOffset = player.crouching ? player.height - TILE_SIZE / 2 : TILE_SIZE - swordWidth;
+    // Lift the standing stab slightly so it can clear low shields.
+    const standingSwordYOffset = TILE_SIZE - swordWidth - 2;
+    const baseOffset = player.crouching ? player.height - TILE_SIZE / 2 : standingSwordYOffset;
     const y = player.y + baseOffset;
     return { x, y, width: swordLength, height: swordWidth };
   }
@@ -877,6 +881,16 @@
       knight.hitTimer--;
     }
 
+    // Apply horizontal knockback velocity while the recoil timer is still active.
+    if (knight.knockbackTimer > 0) {
+      knight.x += knight.vx;
+      knight.vx *= 0.85;
+      knight.knockbackTimer--;
+    } else if (Math.abs(knight.vx) > 0.01) {
+      // Stop any tiny drift that remains once the recoil period ends.
+      knight.vx = 0;
+    }
+
     // When the knight is swinging, keep ticking through the attack animation frames.
     if (knight.attacking) {
       knight.attackTimer++;
@@ -925,7 +939,7 @@
       : knight.x - 1;
     const shieldY = knight.shieldHigh
       ? knight.y + 2
-      : knight.y + knight.height - shieldHeight - 2;
+      : knight.y + knight.height - shieldHeight;
     return {
       x: shieldX,
       y: shieldY,
@@ -941,7 +955,7 @@
     const t = knight.attackTimer;
     // Ignore the sword until the stab frames begin and after they end.
     if (t < knight.attackWindup || t >= knight.attackWindup + knight.attackStab) return null;
-    const swordLength = TILE_SIZE + 4;
+    const swordLength = TILE_SIZE;
     const swordWidth = 4;
     const swordX = knight.facing > 0
       ? knight.x + knight.width
@@ -961,13 +975,24 @@
   // Evaluate collisions between Link and the Armos Knight, including sword clashes and body bumps.
   function handleArmosKnightVsPlayer(knight) {
     const sword = swordHitbox();
+    const knightShield = knightShieldHitbox(knight);
     // Only attempt to damage the knight when Link is mid-stab and the shield does not intercept the blade.
     if (sword && knight.hitTimer === 0) {
-      const knightShield = knightShieldHitbox(knight);
       const swordBlocked = rectsOverlap(sword, knightShield);
       // Only register damage if the blade sneaks around the shield and touches the body.
       if (!swordBlocked && rectsOverlap(sword, knight)) {
         knight.hitTimer = 14;
+        const knockDir = player.facing;
+        knight.vx = knockDir * 2.5;
+        knight.knockbackTimer = 12;
+      } else if (swordBlocked) {
+        // Recoil Link slightly when the shield successfully blocks the strike.
+        const recoilDir = player.facing;
+        player.x -= recoilDir * 1.5;
+        player.vx = -recoilDir * 2.0;
+        player.vy = Math.min(player.vy, -1);
+        player.attacking = false;
+        player.attackTimer = 0;
       }
     }
 
@@ -1012,6 +1037,7 @@
         const dir = playerCenter < enemyCenter ? -1 : 1;
         player.vx = dir * 3.2;
         player.vy = -4;
+        player.x += dir * 1.5;
         player.attacking = false;
         player.attackTimer = 0;
       }
@@ -1459,7 +1485,9 @@
         ? player.x + player.width + forwardAdjust
         : player.x - swordLength - forwardAdjust;
       // Lower sword when crouching
-      const baseOffset = player.crouching ? player.height - TILE_SIZE / 2 : TILE_SIZE - swordWidth;
+      // Use the same lifted offset as the hitbox so visuals and logic align.
+      const standingSwordYOffset = TILE_SIZE - swordWidth - 2;
+      const baseOffset = player.crouching ? player.height - TILE_SIZE / 2 : standingSwordYOffset;
       const swordY = player.y + baseOffset;
       ctx.fillRect(Math.floor(swordX - cameraX), Math.floor(swordY), swordLength, swordWidth);
 
