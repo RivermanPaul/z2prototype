@@ -16,6 +16,10 @@
       -webkit-user-select: none;
       min-height: 100vh;
       position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      touch-action: none;
     }
     #game-layout {
       width: 100%;
@@ -203,6 +207,15 @@
 </div>
 
 <script>
+  // Prevent browser UI gestures (scrolling, pinch-zoom, etc.) from interrupting gameplay.
+  window.addEventListener('gesturestart', (event) => {
+    event.preventDefault();
+  });
+  // Block scrolling that could be triggered by touchmove events while using on-screen controls.
+  window.addEventListener('touchmove', (event) => {
+    event.preventDefault();
+  }, { passive: false });
+
   // Basic Zelda II style platformer prototype
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
