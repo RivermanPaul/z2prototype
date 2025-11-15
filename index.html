@@ -3,6 +3,7 @@
 <head>
   <!-- Documentation policy: comment every function, conditional, and loop to describe its role. -->
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Zelda II HTML5 Prototype</title>
   <style>
     html, body {
@@ -11,6 +12,27 @@
       background: #000;
       color: #fff;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+      min-height: 100vh;
+      position: relative;
+    }
+    #game-layout {
+      width: 100%;
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      padding: 24px 16px 48px;
+      box-sizing: border-box;
+    }
+    #game-stage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
     }
     canvas {
       display: block;
@@ -18,6 +40,8 @@
       image-rendering: crisp-edges;
       margin: 0 auto;
       background: #202048;
+      max-width: 100%;
+      height: auto;
     }
     #info {
       text-align: center;
@@ -101,31 +125,80 @@
         width: 72px;
       }
     }
+    .mobile-landscape body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    .mobile-landscape #game-layout {
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
+      gap: 32px;
+      max-width: none;
+      width: 100%;
+      height: 100%;
+      padding: 0 24px;
+      box-sizing: border-box;
+    }
+    .mobile-landscape #game-stage {
+      flex: 1 1 auto;
+    }
+    .mobile-landscape canvas {
+      width: min(calc((100vh - 48px) * 512 / 288), calc(100vw - 220px));
+      max-width: none;
+      height: auto;
+    }
+    .mobile-landscape #touch-controls {
+      margin: 0;
+      flex-direction: column;
+      flex-wrap: nowrap;
+      gap: 18px;
+      max-width: none;
+      padding: 0;
+    }
+    .mobile-landscape #info {
+      position: absolute;
+      bottom: env(safe-area-inset-bottom, 16px);
+      left: 50%;
+      transform: translateX(-50%);
+      margin-top: 0;
+      font-size: 12px;
+      opacity: 0.85;
+    }
   </style>
 </head>
 <body>
-<canvas id="game" width="512" height="288"></canvas>
-<div id="info">
-  Controls:
-  <kbd>W</kbd>/<kbd>A</kbd>/<kbd>S</kbd>/<kbd>D</kbd> move &amp; crouch,
-  <kbd>K</kbd> jump,
-  <kbd>J</kbd> stab
-</div>
-<div id="touch-controls">
-  <div class="dpad">
-    <button class="empty" tabindex="-1" aria-hidden="true"></button>
-    <button data-key="w" aria-label="Up">▲</button>
-    <button class="empty" tabindex="-1" aria-hidden="true"></button>
-    <button data-key="a" aria-label="Left">◀</button>
-    <button data-key="s" aria-label="Down">▼</button>
-    <button data-key="d" aria-label="Right">▶</button>
-    <button class="empty" tabindex="-1" aria-hidden="true"></button>
-    <button class="empty" tabindex="-1" aria-hidden="true"></button>
-    <button class="empty" tabindex="-1" aria-hidden="true"></button>
+<div id="game-layout">
+  <div id="game-stage">
+    <canvas id="game" width="512" height="288"></canvas>
+    <div id="info">
+      Controls:
+      <kbd>W</kbd>/<kbd>A</kbd>/<kbd>S</kbd>/<kbd>D</kbd> move &amp; crouch,
+      <kbd>K</kbd> jump,
+      <kbd>J</kbd> stab
+    </div>
   </div>
-  <div class="actions">
-    <button data-key="j">Stab</button>
-    <button data-key="k">Jump</button>
+  <div id="touch-controls">
+    <div class="dpad">
+      <button class="empty" tabindex="-1" aria-hidden="true"></button>
+      <button data-key="w" aria-label="Up">▲</button>
+      <button class="empty" tabindex="-1" aria-hidden="true"></button>
+      <button data-key="a" aria-label="Left">◀</button>
+      <button data-key="s" aria-label="Down">▼</button>
+      <button data-key="d" aria-label="Right">▶</button>
+      <button class="empty" tabindex="-1" aria-hidden="true"></button>
+      <button class="empty" tabindex="-1" aria-hidden="true"></button>
+      <button class="empty" tabindex="-1" aria-hidden="true"></button>
+    </div>
+    <div class="actions">
+      <button data-key="j">Stab</button>
+      <button data-key="k">Jump</button>
+    </div>
   </div>
 </div>
 
@@ -133,6 +206,33 @@
   // Basic Zelda II style platformer prototype
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
+
+  // Track whether we are on a small viewport so we can optimize the layout for mobile screens.
+  const mobileMediaQuery = window.matchMedia('(max-width: 768px)');
+
+  // Function that toggles a helper class when the layout should stretch to a full-screen landscape view.
+  function syncMobileLayoutClass() {
+    // Identify when we are both on a mobile-sized viewport and currently in landscape orientation.
+    const inLandscapeMobile = mobileMediaQuery.matches && window.matchMedia('(orientation: landscape)').matches;
+    // Add the helper class so CSS can drive the full-screen layout in mobile landscape.
+    if (inLandscapeMobile) {
+      document.documentElement.classList.add('mobile-landscape');
+    // Remove the class whenever we leave the mobile landscape configuration.
+    } else {
+      document.documentElement.classList.remove('mobile-landscape');
+    }
+  }
+
+  // Ensure the helper class matches the current viewport before the game starts running.
+  syncMobileLayoutClass();
+  // Update the layout helper class whenever the viewport changes dimensions.
+  window.addEventListener('resize', syncMobileLayoutClass);
+  window.addEventListener('orientationchange', syncMobileLayoutClass);
+
+  // Attempt to lock the screen orientation to landscape on mobile browsers that support the API for a more immersive view.
+  if (mobileMediaQuery.matches && 'orientation' in screen && typeof screen.orientation.lock === 'function') {
+    screen.orientation.lock('landscape').catch(() => {});
+  }
 
   // World / tile setup
   const TILE_SIZE = 16;
