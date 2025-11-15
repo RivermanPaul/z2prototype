@@ -257,6 +257,8 @@
 
   // Cache of generated areas so we only build each layout once.
   const areaCache = new Map();
+  // Cache enemy instances per area so we can preserve their state when revisiting rooms.
+  const areaEntities = new Map();
 
   // Produce the tile grid for a given area index.
   function generateAreaTiles(areaIndex) {
@@ -304,6 +306,127 @@
       areaCache.set(areaIndex, generateAreaTiles(areaIndex));
     }
     return areaCache.get(areaIndex);
+  }
+
+  // Return the list of area indices that overlap the current camera view (with padding for nearby rooms).
+  function getVisibleAreaIndices() {
+    const start = Math.floor(cameraX / AREA_WIDTH) - 1;
+    const end = Math.floor((cameraX + canvas.width) / AREA_WIDTH) + 1;
+    const indices = [];
+    // Step through each area index that may appear within or near the viewport so we can activate their entities.
+    for (let areaIndex = start; areaIndex <= end; areaIndex++) {
+      indices.push(areaIndex);
+    }
+    return indices;
+  }
+
+  // Build an octorok instance positioned at the requested world coordinates.
+  function createOctorokAt(x, y) {
+    return {
+      x,
+      y,
+      width: TILE_SIZE,
+      height: TILE_SIZE,
+      vx: 0,
+      vy: 0,
+      gravity: 0.30,
+      maxFall: 8,
+      onGround: false,
+      jumpSpeed: -3.4,
+      hitTimer: 0,
+      prevVy: 0,
+      shotThisJump: false,
+      state: 'waitAfterShot',
+      stateTimer: 120,
+      idleAnimTimer: 0,
+      idleAnimFrame: 0
+    };
+  }
+
+  // Create an Armos Knight that stands at the requested world coordinates.
+  function createArmosKnightAt(x, y) {
+    return {
+      x,
+      y,
+      width: TILE_SIZE,
+      height: TILE_SIZE * 2,
+      facing: -1,
+      attacking: false,
+      attackTimer: 0,
+      attackWindup: 30,
+      attackStab: 12,
+      attackRecover: 18,
+      attackCooldown: 180 + Math.floor(Math.random() * 60),
+      attackHeight: 'high',
+      hitTimer: 0,
+      shieldHigh: true,
+      shieldChangeTimer: 0,
+      get attackDuration() {
+        return this.attackWindup + this.attackStab + this.attackRecover;
+      }
+    };
+  }
+
+  // Locate a suitable platform within the requested area so the resident octorok can perch on it.
+  function findOctorokSpawn(areaIndex, areaTiles) {
+    const platformRow = WORLD_ROWS - 6;
+    // Abort when the configured platform row falls outside the world height.
+    if (platformRow < 0 || platformRow >= WORLD_ROWS) return null;
+    const spans = [];
+    let spanStart = -1;
+    // Scan the entire row to collect contiguous stretches of solid tiles that represent platforms.
+    for (let x = 0; x < AREA_COLS; x++) {
+      // Begin tracking a new platform span whenever a floating solid tile appears after empty space.
+      if (areaTiles[platformRow][x] === 1 && areaTiles[platformRow + 1][x] === 0) {
+        // Start the span at the current column if we are not already tracking one.
+        if (spanStart === -1) {
+          spanStart = x;
+        }
+      // Close out the span as soon as we return to air tiles.
+      } else if (spanStart !== -1) {
+        spans.push({ start: spanStart, end: x - 1 });
+        spanStart = -1;
+      }
+    }
+    // Ensure the trailing platform is recorded if the row ends on a solid tile.
+    if (spanStart !== -1) {
+      spans.push({ start: spanStart, end: AREA_COLS - 1 });
+    }
+    // Skip spawning if the area has no floating platforms.
+    if (spans.length === 0) return null;
+    const targetCenter = AREA_COLS / 2;
+    let bestSpan = spans[0];
+    let smallestDistance = Infinity;
+    // Choose the platform whose center sits closest to the area's midpoint so the fight feels balanced.
+    for (const span of spans) {
+      // Measure how far the current span is from the center so we can keep the closest one.
+      const center = (span.start + span.end + 1) / 2;
+      const distance = Math.abs(center - targetCenter);
+      // Keep whichever span minimizes the distance to the center to reduce travel time.
+      if (distance < smallestDistance) {
+        smallestDistance = distance;
+        bestSpan = span;
+      }
+    }
+    const centerTile = (bestSpan.start + bestSpan.end + 1) / 2;
+    const spawnX = areaIndex * AREA_WIDTH + centerTile * TILE_SIZE - TILE_SIZE / 2;
+    const spawnY = platformRow * TILE_SIZE - TILE_SIZE;
+    return { x: spawnX, y: spawnY };
+  }
+
+  // Lazily generate the persistent enemy set that belongs to a specific area index.
+  function getAreaEntities(areaIndex) {
+    // Build the area's enemies the first time we request them so they persist afterward.
+    if (!areaEntities.has(areaIndex)) {
+      const tiles = getAreaTiles(areaIndex);
+      const spawn = findOctorokSpawn(areaIndex, tiles);
+      const octorok = spawn ? createOctorokAt(spawn.x, spawn.y) : null;
+      const groundY = (WORLD_ROWS - 2) * TILE_SIZE - TILE_SIZE * 2;
+      const knightX = areaIndex * AREA_WIDTH + AREA_WIDTH / 2 - TILE_SIZE / 2;
+      const armosKnight = createArmosKnightAt(knightX, groundY);
+      areaEntities.set(areaIndex, { octorok, armosKnight });
+    }
+    return areaEntities.get(areaIndex);
   }
 
   // Track the current horizontal scroll position of the camera.
@@ -354,27 +477,6 @@
     get attackDuration() {
       return this.attackWindup + this.attackStab + this.attackRecover;
     }
-  };
-
-  // Simple Octorok enemy: 1 tile high
-  const octorok = {
-    x: 19 * TILE_SIZE,
-    y: (WORLD_ROWS - 3) * TILE_SIZE,
-    width: TILE_SIZE,
-    height: TILE_SIZE,
-    vx: 0,
-    vy: 0,
-    gravity: 0.30,
-    maxFall: 8,
-    onGround: false,
-    jumpSpeed: -3.4,
-    hitTimer: 0,
-    prevVy: 0,
-    shotThisJump: false,
-    state: 'waitAfterShot', // initial delay before starting pattern
-    stateTimer: 120,
-    idleAnimTimer: 0,
-    idleAnimFrame: 0
   };
 
   const rocks = [];
@@ -597,7 +699,7 @@
   }
 
   // Advance the octorok AI, including movement, attacks, and reactions to damage.
-  function updateOctorok() {
+  function updateOctorok(octorok) {
     octorok.prevVy = octorok.vy;
 
     // State machine: jump+shoot -> wait -> ground shoot -> wait -> repeat
@@ -718,6 +820,201 @@
     if (octorok.idleAnimTimer >= OCTOROK_IDLE_FRAME_DURATION) {
       octorok.idleAnimTimer = 0;
       octorok.idleAnimFrame = (octorok.idleAnimFrame + 1) % 2;
+    }
+  }
+
+  // Resolve Link's sword strikes and collision responses against a specific octorok.
+  function handleOctorokPlayerInteractions(octorok) {
+    const sword = swordHitbox();
+    // Only damage the enemy when Link is actively stabbing and the octorok is vulnerable.
+    if (sword && rectsOverlap(sword, octorok) && octorok.hitTimer === 0) {
+      octorok.hitTimer = 10;
+      const knockDir = player.facing;
+      octorok.vx = 3 * knockDir;
+      octorok.vy = -2.5;
+    }
+
+    // Evaluate body collisions only when Link is not already recovering from damage.
+    if (player.hitTimer === 0) {
+      const playerBox = {
+        x: player.x,
+        y: player.y,
+        width: player.width,
+        height: player.height
+      };
+      // Trigger knockback and invulnerability when Link bumps into the enemy.
+      if (rectsOverlap(playerBox, octorok)) {
+        player.hitTimer = 24;
+        const playerCenter = player.x + player.width / 2;
+        const enemyCenter = octorok.x + octorok.width / 2;
+        const dir = playerCenter < enemyCenter ? -1 : 1;
+
+        // Immediately separate horizontally so we don't stay overlapping.
+        // Push Link to the left when he was positioned on that side of the enemy.
+        if (dir < 0) {
+          player.x = octorok.x - player.width - 1;
+        } else {
+          player.x = octorok.x + octorok.width + 1;
+        }
+
+        player.vx = dir * 3.2;
+        player.vy = -4;
+        player.attacking = false;
+        player.attackTimer = 0;
+      }
+    }
+  }
+
+  // Advance the Armos Knight's idle, shield, and attack timers.
+  function updateArmosKnight(knight) {
+    const playerCenter = player.x + player.width / 2;
+    const knightCenter = knight.x + knight.width / 2;
+    // Face toward Link so the shield and sword always orient correctly.
+    knight.facing = playerCenter < knightCenter ? -1 : 1;
+
+    // Count down the brief hit flash timer if the knight was recently struck.
+    if (knight.hitTimer > 0) {
+      knight.hitTimer--;
+    }
+
+    // When the knight is swinging, keep ticking through the attack animation frames.
+    if (knight.attacking) {
+      knight.attackTimer++;
+      // Return to idle once the windup, stab, and recovery have all played out.
+      if (knight.attackTimer >= knight.attackDuration) {
+        knight.attacking = false;
+        knight.attackTimer = 0;
+        knight.attackCooldown = 180 + Math.floor(Math.random() * 60);
+      }
+    } else {
+      // Count down the idle cooldown until it is time to launch another strike.
+      if (knight.attackCooldown > 0) {
+        knight.attackCooldown--;
+      }
+      // Start a new attack sequence once the cooldown elapses.
+      if (knight.attackCooldown <= 0) {
+        knight.attacking = true;
+        knight.attackTimer = 0;
+        knight.attackHeight = Math.random() < 0.5 ? 'high' : 'low';
+      }
+    }
+
+    // Only consider changing shield positions when Link is not applying pressure.
+    if (!player.attacking) {
+      knight.shieldChangeTimer++;
+      // Every two seconds roll a coin flip to potentially swap the shield height.
+      if (knight.shieldChangeTimer >= 120) {
+        knight.shieldChangeTimer = 0;
+        // Flip the stance roughly half the time to keep Link guessing.
+        if (Math.random() < 0.5) {
+          knight.shieldHigh = !knight.shieldHigh;
+        }
+      }
+    } else {
+      // Reset the timer while Link is mid-attack so the cadence restarts afterward.
+      knight.shieldChangeTimer = 0;
+    }
+  }
+
+  // Build the knight's shield collision box for the current pose so Link's sword can bounce off of it.
+  function knightShieldHitbox(knight) {
+    const shieldWidth = TILE_SIZE * 0.6;
+    const shieldHeight = TILE_SIZE - 2;
+    const shieldX = knight.facing > 0
+      ? knight.x + knight.width - shieldWidth + 1
+      : knight.x - 1;
+    const shieldY = knight.shieldHigh
+      ? knight.y + 2
+      : knight.y + knight.height - shieldHeight - 2;
+    return {
+      x: shieldX,
+      y: shieldY,
+      width: shieldWidth,
+      height: shieldHeight
+    };
+  }
+
+  // Create the knight's sword hitbox whenever the attack animation reaches the active stab frames.
+  function knightSwordHitbox(knight) {
+    // Do not expose a sword hitbox while the knight is idle.
+    if (!knight.attacking) return null;
+    const t = knight.attackTimer;
+    // Ignore the sword until the stab frames begin and after they end.
+    if (t < knight.attackWindup || t >= knight.attackWindup + knight.attackStab) return null;
+    const swordLength = TILE_SIZE + 4;
+    const swordWidth = 4;
+    const swordX = knight.facing > 0
+      ? knight.x + knight.width
+      : knight.x - swordLength;
+    const verticalOffset = knight.attackHeight === 'high'
+      ? 4
+      : knight.height - TILE_SIZE / 2;
+    const swordY = knight.y + verticalOffset;
+    return {
+      x: swordX,
+      y: swordY,
+      width: swordLength,
+      height: swordWidth
+    };
+  }
+
+  // Evaluate collisions between Link and the Armos Knight, including sword clashes and body bumps.
+  function handleArmosKnightVsPlayer(knight) {
+    const sword = swordHitbox();
+    // Only attempt to damage the knight when Link is mid-stab and the shield does not intercept the blade.
+    if (sword && knight.hitTimer === 0) {
+      const knightShield = knightShieldHitbox(knight);
+      const swordBlocked = rectsOverlap(sword, knightShield);
+      // Only register damage if the blade sneaks around the shield and touches the body.
+      if (!swordBlocked && rectsOverlap(sword, knight)) {
+        knight.hitTimer = 14;
+      }
+    }
+
+    // Treat the knight like a solid enemy so touching it hurts Link.
+    if (player.hitTimer === 0) {
+      const playerBox = {
+        x: player.x,
+        y: player.y,
+        width: player.width,
+        height: player.height
+      };
+      // Apply damage when Link's hurtbox overlaps the knight's body.
+      if (rectsOverlap(playerBox, knight)) {
+        player.hitTimer = 24;
+        const playerCenter = player.x + player.width / 2;
+        const enemyCenter = knight.x + knight.width / 2;
+        const dir = playerCenter < enemyCenter ? -1 : 1;
+
+        // Push Link to whichever side he should bounce away toward.
+        if (dir < 0) {
+          player.x = knight.x - player.width - 1;
+        } else {
+          player.x = knight.x + knight.width + 1;
+        }
+
+        player.vx = dir * 3.2;
+        player.vy = -4;
+        player.attacking = false;
+        player.attackTimer = 0;
+      }
+    }
+
+    const knightSword = knightSwordHitbox(knight);
+    // Let the knight's sword harm Link when it slips past the hero's shield.
+    if (knightSword && player.hitTimer === 0) {
+      const shieldBox = shieldHitbox();
+      // Hurt Link only when his shield fails to cover the incoming stab.
+      if (!rectsOverlap(knightSword, shieldBox)) {
+        player.hitTimer = 24;
+        const playerCenter = player.x + player.width / 2;
+        const enemyCenter = knight.x + knight.width / 2;
+        const dir = playerCenter < enemyCenter ? -1 : 1;
+        player.vx = dir * 3.2;
+        player.vy = -4;
+        player.attacking = false;
+        player.attackTimer = 0;
+      }
     }
   }
 
@@ -978,47 +1275,6 @@
       player.walkAnimFrame = 0;
     }
 
-    // Sword vs Octorok
-    const sword = swordHitbox();
-    // Damage the enemy whenever the sword hitbox overlaps and it's vulnerable.
-    if (sword && rectsOverlap(sword, octorok) && octorok.hitTimer === 0) {
-      octorok.hitTimer = 10;
-      const knockDir = player.facing;
-      octorok.vx = 3 * knockDir;
-      octorok.vy = -2.5;
-    }
-
-    // Player touching Octorok -> knockback + flash
-    // Only check direct body collisions if Link is not currently invulnerable.
-    if (player.hitTimer === 0) {
-      const playerBox = {
-        x: player.x,
-        y: player.y,
-        width: player.width,
-        height: player.height
-      };
-      // Trigger damage handling whenever Link's body overlaps the enemy.
-      if (rectsOverlap(playerBox, octorok)) {
-        player.hitTimer = 24;
-        const playerCenter = player.x + player.width / 2;
-        const enemyCenter = octorok.x + octorok.width / 2;
-        const dir = playerCenter < enemyCenter ? -1 : 1; // knock away from enemy
-
-        // Immediately separate horizontally so we don't stay overlapping
-        // Push Link to the left if he was left of center.
-        if (dir < 0) {
-          player.x = octorok.x - player.width - 1;
-        } else {
-          // Otherwise push him to the right side of the enemy.
-          player.x = octorok.x + octorok.width + 1;
-        }
-
-        player.vx = dir * 3.2;
-        player.vy = -4;
-        player.attacking = false;
-        player.attackTimer = 0;
-      }
-    }
   }
 
   // Render the tile-based ground layout relative to the camera.
@@ -1041,7 +1297,7 @@
   }
 
   // Draw the octorok enemy with its simple animation cues.
-  function drawOctorok() {
+  function drawOctorok(octorok) {
     const x = Math.floor(octorok.x - cameraX);
     const y = Math.floor(octorok.y);
     const w = octorok.width;
@@ -1078,6 +1334,49 @@
     ctx.fillStyle = '#ff905c';
     const tentacleY = y + h - 3 - tentacleLift + bobOffset;
     ctx.fillRect(x, tentacleY, w, 3);
+  }
+
+  // Render the Armos Knight along with its shield and sword indicators.
+  function drawArmosKnight(knight) {
+    const renderX = Math.floor(knight.x - cameraX);
+    const renderY = Math.floor(knight.y);
+    const w = knight.width;
+    const h = knight.height;
+
+    // Flash white while in hitstun to provide quick feedback.
+    if (knight.hitTimer > 0 && (knight.hitTimer % 4 < 2)) {
+      ctx.fillStyle = '#ffffff';
+    } else {
+      ctx.fillStyle = '#a04040';
+    }
+    ctx.fillRect(renderX, renderY, w, h);
+
+    // Draw a darker trim to hint at armor plating.
+    ctx.fillStyle = '#702828';
+    ctx.fillRect(renderX, renderY, w, 4);
+    ctx.fillRect(renderX, renderY + h - 4, w, 4);
+
+    // Depict the helmet with a lighter band.
+    ctx.fillStyle = '#d89060';
+    ctx.fillRect(renderX, renderY, w, Math.floor(TILE_SIZE / 2));
+
+    const shield = knightShieldHitbox(knight);
+    ctx.fillStyle = '#c4c8d8';
+    ctx.fillRect(Math.floor(shield.x - cameraX), Math.floor(shield.y), shield.width, shield.height);
+    ctx.fillStyle = '#8a8fa8';
+    ctx.fillRect(Math.floor(shield.x - cameraX) + 1, Math.floor(shield.y) + 2, shield.width - 2, shield.height - 4);
+
+    const sword = knightSwordHitbox(knight);
+    // Only draw the extended sword while the attack animation is active.
+    if (sword) {
+      ctx.fillStyle = '#f0f0f0';
+      ctx.fillRect(Math.floor(sword.x - cameraX), Math.floor(sword.y), sword.width, sword.height);
+      ctx.fillStyle = '#c8a060';
+      const hiltX = knight.facing > 0
+        ? Math.floor(knight.x + knight.width - cameraX)
+        : Math.floor(knight.x - 6 - cameraX);
+      ctx.fillRect(hiltX, Math.floor(sword.y) - 2, 6, 2);
+    }
   }
 
   // Render the player character, including sword and shield.
@@ -1177,7 +1476,35 @@
   function loop() {
     updatePlayer();
     updateCamera();
-    updateOctorok();
+
+    const visibleAreas = getVisibleAreaIndices();
+    const activeOctoroks = [];
+    const activeKnights = [];
+    // Gather the enemies that belong to every area visible in or near the camera.
+    for (const areaIndex of visibleAreas) {
+      const entities = getAreaEntities(areaIndex);
+      // Track the area's octorok if it exists so we can update and render it.
+      if (entities.octorok) {
+        activeOctoroks.push(entities.octorok);
+      }
+      // Every area includes an Armos Knight, so store the reference for later use.
+      if (entities.armosKnight) {
+        activeKnights.push(entities.armosKnight);
+      }
+    }
+
+    // Update each visible octorok before checking for collisions.
+    for (const enemy of activeOctoroks) {
+      updateOctorok(enemy);
+      handleOctorokPlayerInteractions(enemy);
+    }
+
+    // Advance each Armos Knight's AI and resolve its interactions with Link.
+    for (const knight of activeKnights) {
+      updateArmosKnight(knight);
+      handleArmosKnightVsPlayer(knight);
+    }
+
     updateRocksAndParticles();
 
     // Clear
@@ -1186,7 +1513,16 @@
 
     drawWorld();
     drawPlayer();
-    drawOctorok();
+
+    // Render each active octorok.
+    for (const enemy of activeOctoroks) {
+      drawOctorok(enemy);
+    }
+
+    // Render the knights after the player so their swords overlap correctly.
+    for (const knight of activeKnights) {
+      drawArmosKnight(knight);
+    }
 
     // Draw rocks
     // Iterate over every active projectile to display it.
