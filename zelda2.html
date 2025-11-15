@@ -43,6 +43,7 @@
 </div>
 
 <script>
+  // Documentation policy: every function, conditional, and loop in this prototype has a comment explaining its role for clarity.
   // Basic Zelda II style platformer prototype
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
@@ -54,19 +55,24 @@
 
   // Simple tile map: 0 = empty, 1 = solid
   const world = [];
+  // Iterate over each row of the tile grid to build the level layout.
   for (let y = 0; y < WORLD_ROWS; y++) {
     const row = [];
+    // Step through every column in the current row to decide which tile to place.
     for (let x = 0; x < WORLD_COLS; x++) {
-      // Ground
+      // Fill in solid ground along the last two rows to form the floor.
       if (y === WORLD_ROWS - 2 || y === WORLD_ROWS - 1) {
         row.push(1);
+      // Add a floating platform a few rows up for extra traversal options.
       } else if (y === WORLD_ROWS - 6 && x > 5 && x < 12) {
         // Floating platform
         row.push(1);
+      // Leave all other tiles empty for open air.
       } else {
         row.push(0);
       }
     }
+    // Append the completed row into the world map.
     world.push(row);
   }
 
@@ -132,6 +138,7 @@
 
   window.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
+    // Only handle key presses that match the control scheme.
     if (k in keys) {
       keys[k] = true;
       e.preventDefault();
@@ -139,19 +146,23 @@
   });
   window.addEventListener('keyup', (e) => {
     const k = e.key.toLowerCase();
+    // Only handle key releases that match the control scheme.
     if (k in keys) {
       keys[k] = false;
       e.preventDefault();
     }
   });
 
+  // Convert pixel coordinates into a tile lookup and treat the outside world as solid.
   function tileAtPixel(x, y) {
     const tx = Math.floor(x / TILE_SIZE);
     const ty = Math.floor(y / TILE_SIZE);
+    // Treat coordinates outside the tile array as solid boundaries to keep entities inside the arena.
     if (tx < 0 || ty < 0 || tx >= WORLD_COLS || ty >= WORLD_ROWS) return 1; // treat outside as solid
     return world[ty][tx];
   }
 
+  // Determine whether an axis-aligned rectangle overlaps any solid world tiles.
   function rectVsWorld(x, y, width, height) {
     // Check multiple points along the edges so we don't slip into tiles from the side
     const left = x;
@@ -160,29 +171,41 @@
     const bottom = y + height;
     const midY = (top + bottom) / 2;
 
+    // Test the top-left corner for solid tiles.
     if (tileAtPixel(left, top)) return true;
+    // Test the top-right corner for solid tiles.
     if (tileAtPixel(right - 1, top)) return true;
+    // Test the middle-left point to catch side collisions.
     if (tileAtPixel(left, midY)) return true;
+    // Test the middle-right point to catch side collisions.
     if (tileAtPixel(right - 1, midY)) return true;
+    // Test the bottom-left corner for solid tiles.
     if (tileAtPixel(left, bottom - 1)) return true;
+    // Test the bottom-right corner for solid tiles.
     if (tileAtPixel(right - 1, bottom - 1)) return true;
     return false;
   }
 
+  // Build the active sword hitbox during the stab portion of the attack animation.
   function swordHitbox() {
+    // Skip sword hitbox when no attack is active.
     if (!player.attacking) return null;
     const t = player.attackTimer;
+    // Only create a hitbox during the main stab window.
     if (t < player.attackWindup || t >= player.attackWindup + player.attackStab) return null;
 
     // Match the main stab phase sword position roughly
     const swordLength = TILE_SIZE;
     const swordWidth = 4;
+    // Position the sword based on facing direction.
     const x = player.facing > 0 ? player.x + player.width : player.x - swordLength;
+    // Lower the sword if the player is crouching.
     const baseOffset = player.crouching ? player.height - TILE_SIZE / 2 : TILE_SIZE - swordWidth;
     const y = player.y + baseOffset;
     return { x, y, width: swordLength, height: swordWidth };
   }
 
+  // Basic AABB overlap test used for player/enemy/projectile interactions.
   function rectsOverlap(a, b) {
     return !(
       a.x + a.width <= b.x ||
@@ -192,6 +215,7 @@
     );
   }
 
+  // Create a projectile rock fired by the Octorok at the specified position and velocity.
   function spawnRock(x, y, vx, vy) {
     rocks.push({
       x,
@@ -203,8 +227,10 @@
     });
   }
 
+  // Emit radial particles when a rock explodes for a little visual feedback.
   function spawnRockExplosion(x, y) {
     const count = 8;
+    // Emit particles evenly around the circle.
     for (let i = 0; i < count; i++) {
       const angle = (Math.PI * 2 * i) / count;
       const speed = 1.5 + Math.random();
@@ -218,27 +244,34 @@
     }
   }
 
+  // Advance the simple Octorok state machine, movement, gravity, and projectile firing.
   function updateOctorok() {
     octorok.prevVy = octorok.vy;
 
     // State machine: jump+shoot -> wait -> ground shoot -> wait -> repeat
     // Disabled while in hitstun
     if (octorok.hitTimer === 0) {
+      // Only evaluate timers when in the waiting states.
       if (octorok.state === 'waitAfterShot' || octorok.state === 'waitAfterJump') {
+        // Count down until the next action can occur.
         if (octorok.stateTimer > 0) {
           octorok.stateTimer--;
         }
+        // When the timer expires, branch into the next state action.
         if (octorok.stateTimer <= 0) {
+          // Branch into jump logic if coming from the wait-after-shot state.
           if (octorok.state === 'waitAfterShot') {
-            // Begin jump phase
+            // Begin jump phase when coming out of the wait-after-shot state.
+            // Only launch if firmly planted on the floor.
             if (octorok.onGround) {
               octorok.vy = octorok.jumpSpeed;
               octorok.onGround = false;
             }
             octorok.shotThisJump = false;
             octorok.state = 'jump';
+          // Otherwise handle the grounded shot state.
           } else if (octorok.state === 'waitAfterJump') {
-            // Grounded shot
+            // Fire the ground shot once the post-jump wait ends.
             const mouthSize = 4;
             const mouthX = octorok.x - 2;
             const mouthY = octorok.y + octorok.height / 2 - mouthSize / 2;
@@ -253,32 +286,40 @@
 
     // Gravity
     octorok.vy += octorok.gravity;
+    // Clamp fall speed so the enemy doesn't accelerate endlessly.
     if (octorok.vy > octorok.maxFall) octorok.vy = octorok.maxFall;
 
     // Horizontal movement from knockback
     let newX = octorok.x + octorok.vx;
+    // Apply horizontal movement only if no solid tiles block the new position.
     if (!rectVsWorld(newX, octorok.y, octorok.width, octorok.height)) {
       octorok.x = newX;
     } else {
+      // Stop on collision.
       octorok.vx = 0;
     }
 
     // Vertical collision
     let newY = octorok.y + octorok.vy;
+    // Move vertically when unobstructed.
     if (!rectVsWorld(octorok.x, newY, octorok.width, octorok.height)) {
       octorok.y = newY;
       octorok.onGround = false;
     } else {
+      // Handle resolution separately for falling vs rising.
       if (octorok.vy > 0) {
+        // Step downward until resting on the ground.
         while (!rectVsWorld(octorok.x, octorok.y + 1, octorok.width, octorok.height)) {
           octorok.y += 1;
         }
         octorok.onGround = true;
+        // Transition to the post-jump wait once landing from a jump.
         if (octorok.state === 'jump') {
           octorok.state = 'waitAfterJump';
           octorok.stateTimer = 60;
         }
       } else if (octorok.vy < 0) {
+        // Step upward until the head is no longer intersecting tiles.
         while (!rectVsWorld(octorok.x, octorok.y - 1, octorok.width, octorok.height)) {
           octorok.y -= 1;
         }
@@ -289,10 +330,12 @@
     // Friction on ground for knockback
     if (octorok.onGround) {
       octorok.vx *= 0.85;
+      // Cut off negligible movement once almost stopped.
       if (Math.abs(octorok.vx) < 0.05) octorok.vx = 0;
     }
 
     const wasHit = octorok.hitTimer > 0;
+    // Count down hit-stun frames when active.
     if (octorok.hitTimer > 0) {
       octorok.hitTimer--;
     }
@@ -317,16 +360,20 @@
     }
   }
 
+  // Return the shield rectangle, adjusting for crouching so projectiles can collide with it.
   function shieldHitbox() {
     const shieldWidth = TILE_SIZE * 0.6;
     const shieldHeight = TILE_SIZE;
     let shieldY;
+    // Lower the shield to cover Link's knees while crouching.
     if (player.crouching) {
       shieldY = player.y + player.height - shieldHeight;
     } else {
+      // Otherwise keep it higher when standing.
       shieldY = player.y + TILE_SIZE * 0.2;
     }
     let shieldX;
+    // Position the shield on the leading edge depending on facing.
     if (player.facing > 0) {
       shieldX = player.x + player.width - shieldWidth + 1;
     } else {
@@ -340,9 +387,12 @@
     };
   }
 
+  // Move active rocks/particles, resolve collisions, and clean up finished effects.
   function updateRocksAndParticles() {
     // Rocks
+    // Process each active rock projectile.
     for (const rock of rocks) {
+      // Skip already-destroyed rocks.
       if (!rock.alive) continue;
       rock.x += rock.vx;
       rock.y += rock.vy;
@@ -366,6 +416,7 @@
       // Shield blocks the rock
       if (rectsOverlap(rockBox, shieldBox)) {
         exploded = true;
+      // Otherwise check for a player hit while not invincible.
       } else if (rectsOverlap(rockBox, playerBox) && player.hitTimer === 0) {
         // Hit the player
         player.hitTimer = 24;
@@ -380,11 +431,13 @@
       }
 
       // Offscreen
+      // Mark rocks as exploded once they leave the canvas bounds.
       if (rock.x + rock.size < 0 || rock.x > canvas.width ||
           rock.y + rock.size < 0 || rock.y > canvas.height) {
         exploded = true;
       }
 
+      // Spawn particles on explosion.
       if (exploded) {
         rock.alive = false;
         spawnRockExplosion(rock.x + rock.size / 2, rock.y + rock.size / 2);
@@ -392,26 +445,34 @@
     }
 
     // Compact rocks array
+    // Remove dead rocks by walking the list backwards.
     for (let i = rocks.length - 1; i >= 0; i--) {
+      // Remove entries whose lifetime has ended.
       if (!rocks[i].alive) rocks.splice(i, 1);
     }
 
     // Particles
+    // Update each lingering particle's motion.
     for (const p of particles) {
       p.x += p.vx;
       p.y += p.vy;
       p.vy += 0.05;
       p.life--;
     }
+    // Remove expired particles in reverse order.
     for (let i = particles.length - 1; i >= 0; i--) {
+      // Delete particles once their life counter reaches zero.
       if (particles[i].life <= 0) particles.splice(i, 1);
     }
   }
 
+    // Process input, movement, collision, combat state, and interactions for Link.
   function updatePlayer() {
     // Horizontal input (used for facing even while attacking)
     let inputDir = 0;
+    // Pressing A steers left.
     if (keys.a) inputDir -= 1;
+    // Pressing D steers right.
     if (keys.d) inputDir += 1;
 
     const lockMovement = (player.attacking && player.onGround) || player.hitTimer > 0;
@@ -420,12 +481,15 @@
     // Crouch (S) can be used on ground or in air,
     // but you can't change crouch state during an attack
     const wasCrouching = player.crouching;
+    // Only allow crouch toggling when not attacking or hit.
     if (!player.attacking && player.hitTimer === 0) {
       player.crouching = keys.s;
     }
 
     // Adjust collision box when crouching / standing
+    // React to crouch-state changes by reshaping the hitbox.
     if (player.crouching !== wasCrouching) {
+      // Shrink the player when crouching.
       if (player.crouching) {
         const delta = player.standHeight - player.crouchHeight;
         player.y += delta;
@@ -434,27 +498,32 @@
         const delta = player.standHeight - player.crouchHeight;
         const newY = player.y - delta;
         // Only stand up if there is room
+        // Prevent uncrouching if the ceiling is too low.
         if (!rectVsWorld(player.x, newY, player.width, player.standHeight)) {
           player.y = newY;
           player.height = player.standHeight;
         } else {
+          // Stay crouched when blocked.
           player.crouching = true;
         }
       }
     }
 
     // Facing direction (ignore zero movement)
+    // Update facing whenever the player is actually pressing a direction.
     if (inputDir !== 0) {
       player.facing = inputDir > 0 ? 1 : -1;
     }
 
     // Apply horizontal velocity (no air control damping)
     // During hit-stun, preserve knockback velocity instead of overriding it
+    // Only apply movement input when not taking damage.
     if (player.hitTimer === 0) {
       player.vx = moveX * player.speed;
     }
 
     // Jump (K)
+    // Initiate a jump only when grounded, idle, and not hurt.
     if (keys.k && player.onGround && !player.attacking && player.hitTimer === 0) {
       player.vy = player.jumpSpeed;
       player.onGround = false;
@@ -462,14 +531,17 @@
 
     // Gravity
     player.vy += player.gravity;
+    // Clamp falling speed for predictable control.
     if (player.vy > player.maxFall) player.vy = player.maxFall;
 
     // Horizontal collision
     let newX = player.x + player.vx;
+    // Move horizontally when the path is clear.
     if (!rectVsWorld(newX, player.y, player.width, player.height)) {
       player.x = newX;
     } else {
       // slide
+      // Slide along the obstacle pixel by pixel until hitting a wall.
       while (!rectVsWorld(player.x + Math.sign(player.vx), player.y, player.width, player.height)) {
         player.x += Math.sign(player.vx);
       }
@@ -478,18 +550,22 @@
 
     // Vertical collision
     let newY = player.y + player.vy;
+    // Apply vertical movement if unobstructed.
     if (!rectVsWorld(player.x, newY, player.width, player.height)) {
       player.y = newY;
       player.onGround = false;
     } else {
+      // Resolve differently for landing vs. hitting a ceiling.
       if (player.vy > 0) {
         // Landing on ground
+        // Step downward until resting on the floor.
         while (!rectVsWorld(player.x, player.y + 1, player.width, player.height)) {
           player.y += 1;
         }
         player.onGround = true;
       } else if (player.vy < 0) {
         // Hitting ceiling
+        // Step upward until no longer colliding with the ceiling.
         while (!rectVsWorld(player.x, player.y - 1, player.width, player.height)) {
           player.y -= 1;
         }
@@ -498,25 +574,30 @@
     }
 
     // Attack (J) - standing or crouching allowed
+    // Start a new attack if not already in one and not hit.
     if (keys.j && !player.attacking && player.hitTimer === 0) {
       player.attacking = true;
       player.attackTimer = 0;
     }
 
+    // Advance the attack timer while active.
     if (player.attacking) {
       player.attackTimer++;
+      // End the attack when its total duration elapses.
       if (player.attackTimer >= player.attackDuration) {
         player.attacking = false;
         player.attackTimer = 0;
       }
     }
 
+    // Count down the damage invulnerability frames if active.
     if (player.hitTimer > 0) {
       player.hitTimer--;
     }
 
     // Sword vs Octorok
     const sword = swordHitbox();
+    // Apply damage to the Octorok when the sword overlaps and it's not already in hitstun.
     if (sword && rectsOverlap(sword, octorok) && octorok.hitTimer === 0) {
       octorok.hitTimer = 10;
       const knockDir = player.facing;
@@ -525,6 +606,7 @@
     }
 
     // Player touching Octorok -> knockback + flash
+    // Only process touch damage if the player isn't already hurt.
     if (player.hitTimer === 0) {
       const playerBox = {
         x: player.x,
@@ -532,6 +614,7 @@
         width: player.width,
         height: player.height
       };
+      // Trigger damage when the bounding boxes overlap.
       if (rectsOverlap(playerBox, octorok)) {
         player.hitTimer = 24;
         const playerCenter = player.x + player.width / 2;
@@ -539,6 +622,7 @@
         const dir = playerCenter < enemyCenter ? -1 : 1; // knock away from enemy
 
         // Immediately separate horizontally so we don't stay overlapping
+        // Snap to the opposite side based on knockback direction.
         if (dir < 0) {
           player.x = octorok.x - player.width - 1;
         } else {
@@ -553,9 +637,13 @@
     }
   }
 
+  // Render the tile map background to provide a simple level to traverse.
   function drawWorld() {
+    // Walk through every tile row to find solids.
     for (let y = 0; y < WORLD_ROWS; y++) {
+      // Examine each column within the current row.
       for (let x = 0; x < WORLD_COLS; x++) {
+        // Only draw solid tiles.
         if (world[y][x] === 1) {
           ctx.fillStyle = '#303060';
           ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
@@ -566,6 +654,7 @@
     }
   }
 
+  // Draw the Octorok enemy with simple flashing hit feedback and features.
   function drawOctorok() {
     const x = Math.floor(octorok.x);
     const y = Math.floor(octorok.y);
@@ -573,6 +662,7 @@
     const h = octorok.height;
 
     // Flash when hit
+    // Alternate colors based on the hit timer for a flashing effect.
     if (octorok.hitTimer > 0 && (octorok.hitTimer % 4 < 2)) {
       ctx.fillStyle = '#ffffff';
     } else {
@@ -594,8 +684,10 @@
     ctx.fillRect(Math.floor(mouthX), Math.floor(mouthY), mouthWidth, mouthHeight);
   }
 
+  // Render the player sprite along with shield and sword depending on current state.
   function drawPlayer() {
     // Base body color (flash when hit)
+    // Alternate colors based on the hit timer for feedback.
     if (player.hitTimer > 0 && (player.hitTimer % 4 < 2)) {
       ctx.fillStyle = '#ffffff';
     } else {
@@ -607,6 +699,7 @@
 
     // Head (top section)
     const headHeight = Math.min(TILE_SIZE, player.height);
+    // Flash the head alongside the body when hit.
     if (player.hitTimer > 0 && (player.hitTimer % 4 < 2)) {
       ctx.fillStyle = '#ffffff';
     } else {
@@ -626,11 +719,14 @@
     ctx.fillRect(Math.floor(sBox.x) + 1, Math.floor(sBox.y) + 2, sBox.width - 2, sBox.height - 4);
 
     // Sword stab
+    // Only draw the sword trail when in an attack animation.
     if (player.attacking) {
       const t = player.attackTimer;
       let phase = 'recover';
+      // During the initial frames show the windup pose.
       if (t < player.attackWindup) {
         phase = 'windup';
+      // Midway through, render the extended stab frame.
       } else if (t < player.attackWindup + player.attackStab) {
         phase = 'stab';
       }
@@ -638,9 +734,11 @@
       // Length / offset by phase
       let swordLength = TILE_SIZE;
       let forwardAdjust = 0;
+      // Shorten and pull back the sword during windup.
       if (phase === 'windup') {
         swordLength = TILE_SIZE / 2;
         forwardAdjust = -swordLength / 2;
+      // Likewise retract partially in the recovery phase.
       } else if (phase === 'recover') {
         swordLength = TILE_SIZE / 2;
         forwardAdjust = -swordLength / 4;
@@ -665,6 +763,7 @@
     }
   }
 
+  // Main game loop: update entities, clear the canvas, and render everything each frame.
   function loop() {
     updatePlayer();
     updateOctorok();
@@ -679,12 +778,14 @@
     drawOctorok();
 
     // Draw rocks
+    // Render each rock projectile as a small square.
     for (const rock of rocks) {
       ctx.fillStyle = '#d0b090';
       ctx.fillRect(Math.floor(rock.x), Math.floor(rock.y), rock.size, rock.size);
     }
 
     // Draw particles
+    // Render each explosion particle as a glowing pixel.
     for (const p of particles) {
       ctx.fillStyle = 'rgba(255, 220, 160, 0.8)';
       ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 2, 2);
