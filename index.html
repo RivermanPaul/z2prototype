@@ -1015,6 +1015,12 @@
   function handleArmosKnightVsPlayer(knight) {
     const sword = swordHitbox();
     const knightShield = knightShieldHitbox(knight);
+    const playerBox = {
+      x: player.x,
+      y: player.y,
+      width: player.width,
+      height: player.height
+    };
     // Only attempt to damage the knight when Link is mid-stab and the shield does not intercept the blade.
     if (sword && knight.hitTimer === 0) {
       const swordBlocked = rectsOverlap(sword, knightShield);
@@ -1036,12 +1042,6 @@
 
     // Treat the knight like a solid enemy so touching it hurts Link.
     if (player.hitTimer === 0) {
-      const playerBox = {
-        x: player.x,
-        y: player.y,
-        width: player.width,
-        height: player.height
-      };
       // Apply damage when Link's hurtbox overlaps the knight's body.
       if (rectsOverlap(playerBox, knight)) {
         player.hitTimer = 24;
@@ -1068,8 +1068,10 @@
     // Let the knight's sword harm Link when it slips past the hero's shield.
     if (knightSword && player.hitTimer === 0) {
       const shieldBox = shieldHitbox();
-      // Hurt Link only when his shield fails to cover the incoming stab.
-      if (!rectsOverlap(knightSword, shieldBox)) {
+      const swordHitsPlayer = rectsOverlap(knightSword, playerBox);
+      const shieldBlocksSword = rectsOverlap(knightSword, shieldBox);
+      // Hurt Link only when the sword overlaps his body without being blocked by the shield.
+      if (swordHitsPlayer && !shieldBlocksSword) {
         player.hitTimer = 24;
         const playerCenter = player.x + player.width / 2;
         const enemyCenter = knight.x + knight.width / 2;
