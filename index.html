@@ -512,6 +512,11 @@
 
   const activePointers = new Map();
 
+  // Track whether the attack input was pressed on the previous frame so we can detect single presses.
+  let lastAttackPressed = false;
+  // Track whether the jump input was pressed on the previous frame so we only trigger a jump on the edge.
+  let lastJumpPressed = false;
+
   // Release buttons that still track a pointer id or clear a specific button entirely.
   function releasePointerFromButtons(pointerId, specificButton) {
     // Iterate over each button that still has one or more active pointers.
@@ -1403,6 +1408,11 @@
     // Pull together keyboard, touch, and controller state so gameplay reads from one source.
     const inputKeys = combinedInputKeys();
 
+    // Detect a fresh press of the attack button so holding it down does not chain multiple swings.
+    const attackJustPressed = inputKeys.j && !lastAttackPressed;
+    // Detect a fresh press of the jump button so holding it down does not trigger repeated jumps.
+    const jumpJustPressed = inputKeys.k && !lastJumpPressed;
+
     // Horizontal input (used for facing even while attacking)
     let inputDir = 0;
     // Tilt left when the virtual left input is held down.
@@ -1456,8 +1466,8 @@
     }
 
     // Jump (virtual K)
-    // Trigger a jump when the virtual jump button is pressed while grounded and free to move.
-    if (inputKeys.k && player.onGround && !player.attacking && player.hitTimer === 0) {
+    // Trigger a jump only when the virtual jump button transitions from up to down while grounded and free to move.
+    if (jumpJustPressed && player.onGround && !player.attacking && player.hitTimer === 0) {
       player.vy = player.jumpSpeed;
       player.onGround = false;
     }
@@ -1507,8 +1517,8 @@
     }
 
     // Attack (virtual J) - standing or crouching allowed
-    // Start a new stab when the virtual attack button is pressed and Link is free to act.
-    if (inputKeys.j && !player.attacking && player.hitTimer === 0) {
+    // Start a new stab only when the attack button transitions from up to down and Link is free to act.
+    if (attackJustPressed && !player.attacking && player.hitTimer === 0) {
       player.attacking = true;
       player.attackTimer = 0;
       player.blockedThisSwing = false;
@@ -1551,6 +1561,10 @@
       player.walkAnimTimer = 0;
       player.walkAnimFrame = 0;
     }
+
+    // Remember whether the attack and jump inputs are held for the next frame so we can continue to detect edge presses.
+    lastAttackPressed = inputKeys.j;
+    lastJumpPressed = inputKeys.k;
 
   }
 
