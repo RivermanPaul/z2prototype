@@ -473,6 +473,7 @@
     attackWindup: 2,
     attackStab: 6,
     attackRecover: 3,
+    blockedThisSwing: false,
     walking: false,
     walkAnimTimer: 0,
     walkAnimFrame: 0,
@@ -865,6 +866,7 @@
         player.vy = -4;
         player.attacking = false;
         player.attackTimer = 0;
+        player.blockedThisSwing = false;
       }
     }
   }
@@ -948,28 +950,65 @@
     };
   }
 
-  // Create the knight's sword hitbox whenever the attack animation reaches the active stab frames.
-  function knightSwordHitbox(knight) {
-    // Do not expose a sword hitbox while the knight is idle.
-    if (!knight.attacking) return null;
+  // Determine which segment of the attack animation is currently playing for the knight.
+  function knightAttackPhase(knight) {
+    if (!knight.attacking) return 'idle';
     const t = knight.attackTimer;
-    // Ignore the sword until the stab frames begin and after they end.
-    if (t < knight.attackWindup || t >= knight.attackWindup + knight.attackStab) return null;
-    const swordLength = TILE_SIZE;
+    if (t < knight.attackWindup) return 'windup';
+    if (t < knight.attackWindup + knight.attackStab) return 'stab';
+    return 'recover';
+  }
+
+  // Compute the sword's rectangle for rendering and collision so they always stay in sync.
+  function knightSwordPose(knight) {
+    const phase = knightAttackPhase(knight);
+    if (phase === 'idle') return null;
+
     const swordWidth = 4;
+    let swordLength = TILE_SIZE;
+    let forwardAdjust = 0;
+
+    // Gradually pull the sword back during the windup to create a telegraphed motion.
+    if (phase === 'windup') {
+      const windupProgress = knight.attackWindup === 0
+        ? 1
+        : knight.attackTimer / knight.attackWindup;
+      swordLength = TILE_SIZE * 0.8;
+      forwardAdjust = -swordLength * (1 - windupProgress);
+    // Ease the sword back toward the body while recovering from a stab.
+    } else if (phase === 'recover') {
+      const recoverElapsed = knight.attackTimer - (knight.attackWindup + knight.attackStab);
+      const recoverDuration = Math.max(1, knight.attackRecover);
+      const recoverProgress = Math.min(1, recoverElapsed / recoverDuration);
+      swordLength = TILE_SIZE * 0.8;
+      forwardAdjust = -swordLength * recoverProgress * 0.8;
+    }
+
     const swordX = knight.facing > 0
-      ? knight.x + knight.width
-      : knight.x - swordLength;
+      ? knight.x + knight.width + forwardAdjust
+      : knight.x - swordLength - forwardAdjust;
     const verticalOffset = knight.attackHeight === 'high'
       ? 4
       : knight.height - TILE_SIZE / 2;
-    const swordY = knight.y + verticalOffset;
+    const swordY = knight.y + verticalOffset - (phase === 'windup' ? 2 : 0);
+
     return {
-      x: swordX,
-      y: swordY,
-      width: swordLength,
-      height: swordWidth
+      phase,
+      rect: {
+        x: swordX,
+        y: swordY,
+        width: swordLength,
+        height: swordWidth
+      }
     };
+  }
+
+  // Create the knight's sword hitbox whenever the attack animation reaches the active stab frames.
+  function knightSwordHitbox(knight) {
+    const pose = knightSwordPose(knight);
+    // Abort when the knight is not currently swinging the sword.
+    if (!pose || pose.phase !== 'stab') return null;
+    return pose.rect;
   }
 
   // Evaluate collisions between Link and the Armos Knight, including sword clashes and body bumps.
@@ -985,14 +1024,13 @@
         const knockDir = player.facing;
         knight.vx = knockDir * 2.5;
         knight.knockbackTimer = 12;
-      } else if (swordBlocked) {
+      } else if (swordBlocked && !player.blockedThisSwing) {
         // Recoil Link slightly when the shield successfully blocks the strike.
         const recoilDir = player.facing;
         player.x -= recoilDir * 1.5;
         player.vx = -recoilDir * 2.0;
         player.vy = Math.min(player.vy, -1);
-        player.attacking = false;
-        player.attackTimer = 0;
+        player.blockedThisSwing = true;
       }
     }
 
@@ -1022,6 +1060,7 @@
         player.vy = -4;
         player.attacking = false;
         player.attackTimer = 0;
+        player.blockedThisSwing = false;
       }
     }
 
@@ -1040,6 +1079,7 @@
         player.x += dir * 1.5;
         player.attacking = false;
         player.attackTimer = 0;
+        player.blockedThisSwing = false;
       }
     }
   }
@@ -1109,6 +1149,7 @@
         player.vy = -4;
         player.attacking = false;
         player.attackTimer = 0;
+        player.blockedThisSwing = false;
         exploded = true;
       }
 
@@ -1262,6 +1303,7 @@
     if (keys.j && !player.attacking && player.hitTimer === 0) {
       player.attacking = true;
       player.attackTimer = 0;
+      player.blockedThisSwing = false;
     }
 
     // Count through the attack animation frames.
@@ -1271,6 +1313,7 @@
       if (player.attackTimer >= player.attackDuration) {
         player.attacking = false;
         player.attackTimer = 0;
+        player.blockedThisSwing = false;
       }
     }
 
@@ -1392,16 +1435,24 @@
     ctx.fillStyle = '#8a8fa8';
     ctx.fillRect(Math.floor(shield.x - cameraX) + 1, Math.floor(shield.y) + 2, shield.width - 2, shield.height - 4);
 
-    const sword = knightSwordHitbox(knight);
-    // Only draw the extended sword while the attack animation is active.
-    if (sword) {
-      ctx.fillStyle = '#f0f0f0';
-      ctx.fillRect(Math.floor(sword.x - cameraX), Math.floor(sword.y), sword.width, sword.height);
+    const swordPose = knightSwordPose(knight);
+    // Only draw the sword when the animation is active.
+    if (swordPose) {
+      const { rect, phase } = swordPose;
+      const swordScreenX = Math.floor(rect.x - cameraX);
+      const swordScreenY = Math.floor(rect.y);
+      ctx.fillStyle = phase === 'windup' ? '#ffd480' : '#f0f0f0';
+      ctx.fillRect(swordScreenX, swordScreenY, rect.width, rect.height);
+      // Add a subtle glow during the windup so players can spot the upcoming strike.
+      if (phase === 'windup') {
+        ctx.fillStyle = 'rgba(255, 215, 130, 0.35)';
+        ctx.fillRect(swordScreenX - 1, swordScreenY - 1, rect.width + 2, rect.height + 2);
+      }
       ctx.fillStyle = '#c8a060';
       const hiltX = knight.facing > 0
         ? Math.floor(knight.x + knight.width - cameraX)
         : Math.floor(knight.x - 6 - cameraX);
-      ctx.fillRect(hiltX, Math.floor(sword.y) - 2, 6, 2);
+      ctx.fillRect(hiltX, swordScreenY - 2, 6, 2);
     }
   }
 
