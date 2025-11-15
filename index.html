@@ -249,30 +249,75 @@
 
   // World / tile setup
   const TILE_SIZE = 16;
-  const WORLD_COLS = Math.floor(canvas.width / TILE_SIZE);
   const WORLD_ROWS = Math.floor(canvas.height / TILE_SIZE);
+  const SCREEN_COLS = Math.floor(canvas.width / TILE_SIZE);
+  const AREA_SCREEN_COUNT = 2;
+  const AREA_COLS = SCREEN_COLS * AREA_SCREEN_COUNT;
+  const AREA_WIDTH = AREA_COLS * TILE_SIZE;
 
-  // Simple tile map: 0 = empty, 1 = solid
-  const world = [];
-  // Generate every row of the tile map so we can define solid/empty space per column.
-  for (let y = 0; y < WORLD_ROWS; y++) {
-    const row = [];
-    // Populate the current row column-by-column to decide which cells are solid.
-    for (let x = 0; x < WORLD_COLS; x++) {
-      // Fill the final two rows with ground tiles so the player always has a floor.
-      if (y === WORLD_ROWS - 2 || y === WORLD_ROWS - 1) {
-        row.push(1);
-      // Carve out a floating platform across the specified range to add variety.
-      } else if (y === WORLD_ROWS - 6 && x > 5 && x < 12) {
-        // Floating platform
-        row.push(1);
-      // Leave all other cells empty so they behave like air.
-      } else {
-        row.push(0);
+  // Cache of generated areas so we only build each layout once.
+  const areaCache = new Map();
+
+  // Produce the tile grid for a given area index.
+  function generateAreaTiles(areaIndex) {
+    const tiles = [];
+    // Build the base ground/air layout row-by-row.
+    // Iterate over each world row so we can fill in the ground pattern.
+    for (let y = 0; y < WORLD_ROWS; y++) {
+      const row = [];
+      // Populate the row column-by-column so every cell receives either solid ground or air.
+      for (let x = 0; x < AREA_COLS; x++) {
+        // Keep the bottom two rows solid to act as ground just like the original room.
+        if (y === WORLD_ROWS - 2 || y === WORLD_ROWS - 1) {
+          row.push(1);
+        } else {
+          row.push(0);
+        }
+      }
+      tiles.push(row);
+    }
+
+    // Add floating platforms. Each step to the right gains one more platform, steps to the
+    // left remove one, and the base area starts with a single platform.
+    const platformCount = Math.max(0, areaIndex + 1);
+    const platformRow = WORLD_ROWS - 6;
+    const platformWidth = 6;
+    if (platformRow >= 0 && platformCount > 0) {
+      const spacing = AREA_COLS / (platformCount + 1);
+      // Step through each platform slot so we can drop solid ledges across the span.
+      for (let i = 0; i < platformCount; i++) {
+        const center = Math.round(spacing * (i + 1));
+        const start = Math.max(1, Math.min(AREA_COLS - platformWidth - 1, Math.floor(center - platformWidth / 2)));
+        // Fill every tile covered by the platform with solid cells.
+        for (let x = start; x < start + platformWidth; x++) {
+          tiles[platformRow][x] = 1;
+        }
       }
     }
-    // Append the fully built row into the world layout.
-    world.push(row);
+
+    return tiles;
+  }
+
+  // Return (and lazily build) the tile array for the requested area index.
+  function getAreaTiles(areaIndex) {
+    if (!areaCache.has(areaIndex)) {
+      areaCache.set(areaIndex, generateAreaTiles(areaIndex));
+    }
+    return areaCache.get(areaIndex);
+  }
+
+  // Track the current horizontal scroll position of the camera.
+  let cameraX = 0;
+
+  // Update the camera so it stays centered on Link while remaining inside the active area.
+  function updateCamera() {
+    const areaIndex = Math.floor(player.x / AREA_WIDTH);
+    const areaStart = areaIndex * AREA_WIDTH;
+    const areaEnd = areaStart + AREA_WIDTH;
+    const target = player.x + player.width / 2 - canvas.width / 2;
+    const minCam = areaStart;
+    const maxCam = areaEnd - canvas.width;
+    cameraX = Math.min(Math.max(target, minCam), maxCam);
   }
 
   // Duration of the player's walking animation frames in ticks.
@@ -454,13 +499,21 @@
     });
   }
 
+  // Look up the tile index that occupies the given tile coordinate across any area.
+  function tileAtTileCoordinates(tileX, tileY) {
+    if (tileY < 0 || tileY >= WORLD_ROWS) return 1;
+    const areaIndex = Math.floor(tileX / AREA_COLS);
+    const localTileX = tileX - areaIndex * AREA_COLS;
+    const areaTiles = getAreaTiles(areaIndex);
+    if (localTileX < 0 || localTileX >= AREA_COLS) return 1;
+    return areaTiles[tileY][localTileX];
+  }
+
   // Look up the tile index that occupies the given pixel coordinate.
   function tileAtPixel(x, y) {
     const tx = Math.floor(x / TILE_SIZE);
     const ty = Math.floor(y / TILE_SIZE);
-    // Treat coordinates outside the map as solid so entities cannot leave the world.
-    if (tx < 0 || ty < 0 || tx >= WORLD_COLS || ty >= WORLD_ROWS) return 1; // treat outside as solid
-    return world[ty][tx];
+    return tileAtTileCoordinates(tx, ty);
   }
 
   // Determine whether a rectangle collides with any solid world tiles.
@@ -737,9 +790,14 @@
       }
 
       // Offscreen
-      // Blow up the projectile if it wanders off-screen to keep arrays small.
-      if (rock.x + rock.size < 0 || rock.x > canvas.width ||
-          rock.y + rock.size < 0 || rock.y > canvas.height) {
+      // Blow up the projectile if it wanders far outside the current view to keep arrays small.
+      const offscreenPadding = TILE_SIZE * 4;
+      const viewLeft = cameraX - offscreenPadding;
+      const viewRight = cameraX + canvas.width + offscreenPadding;
+      const viewTop = -offscreenPadding;
+      const viewBottom = canvas.height + offscreenPadding;
+      if (rock.x + rock.size < viewLeft || rock.x > viewRight ||
+          rock.y + rock.size < viewTop || rock.y > viewBottom) {
         exploded = true;
       }
 
@@ -963,18 +1021,20 @@
     }
   }
 
-  // Render the tile-based ground layout.
+  // Render the tile-based ground layout relative to the camera.
   function drawWorld() {
-    // Walk across each row to draw the visible tiles.
+    const startTileX = Math.floor(cameraX / TILE_SIZE);
+    const endTileX = Math.floor((cameraX + canvas.width) / TILE_SIZE) + 1;
+    // Walk each row in the playfield so we can render any visible tiles.
     for (let y = 0; y < WORLD_ROWS; y++) {
-      // Inspect every column within the current row.
-      for (let x = 0; x < WORLD_COLS; x++) {
-        // Paint solid tiles only so empty cells stay transparent.
-        if (world[y][x] === 1) {
+      // Inspect every column that overlaps the current viewport.
+      for (let tileX = startTileX; tileX <= endTileX; tileX++) {
+        if (tileAtTileCoordinates(tileX, y) === 1) {
+          const drawX = tileX * TILE_SIZE - cameraX;
           ctx.fillStyle = '#303060';
-          ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          ctx.fillRect(drawX, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
           ctx.fillStyle = '#505090';
-          ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, 4);
+          ctx.fillRect(drawX, y * TILE_SIZE, TILE_SIZE, 4);
         }
       }
     }
@@ -982,7 +1042,7 @@
 
   // Draw the octorok enemy with its simple animation cues.
   function drawOctorok() {
-    const x = Math.floor(octorok.x);
+    const x = Math.floor(octorok.x - cameraX);
     const y = Math.floor(octorok.y);
     const w = octorok.width;
     const h = octorok.height;
@@ -1022,6 +1082,9 @@
 
   // Render the player character, including sword and shield.
   function drawPlayer() {
+    const renderX = Math.floor(player.x - cameraX);
+    const renderY = Math.floor(player.y);
+
     // Base body color (flash when hit)
     if (player.hitTimer > 0 && (player.hitTimer % 4 < 2)) {
       ctx.fillStyle = '#ffffff';
@@ -1030,7 +1093,7 @@
     }
 
     // Body (simple rectangle)
-    ctx.fillRect(Math.floor(player.x), Math.floor(player.y), player.width, player.height);
+    ctx.fillRect(renderX, renderY, player.width, player.height);
 
     // Head (top section)
     const headHeight = Math.min(TILE_SIZE, player.height);
@@ -1039,11 +1102,11 @@
     } else {
       ctx.fillStyle = '#ffe6a0';
     }
-    ctx.fillRect(Math.floor(player.x), Math.floor(player.y), player.width, headHeight);
+    ctx.fillRect(renderX, renderY, player.width, headHeight);
 
     // Simple helmet / hair band
     ctx.fillStyle = '#40a040';
-    ctx.fillRect(Math.floor(player.x), Math.floor(player.y), player.width, 4);
+    ctx.fillRect(renderX, renderY, player.width, 4);
 
     // Draw the feet with a tiny two-frame walking cycle.
     const footHeight = 4;
@@ -1055,16 +1118,16 @@
     const rightLift = player.walking && player.walkAnimFrame === 1 ? 2 : 0;
     ctx.fillStyle = '#1f6e32';
     // Left foot rectangle that raises when the leg lifts.
-    ctx.fillRect(Math.floor(player.x), footBaseY - leftLift, legWidth, footHeight);
+    ctx.fillRect(renderX, footBaseY - leftLift, legWidth, footHeight);
     // Right foot rectangle that raises during its corresponding frame.
-    ctx.fillRect(Math.floor(player.x + legWidth), footBaseY - rightLift, player.width - legWidth, footHeight);
+    ctx.fillRect(Math.floor(player.x + legWidth - cameraX), footBaseY - rightLift, player.width - legWidth, footHeight);
 
     // Shield (position depends on crouch / stand)
     const sBox = shieldHitbox();
     ctx.fillStyle = '#b0c0ff';
-    ctx.fillRect(Math.floor(sBox.x), Math.floor(sBox.y), sBox.width, sBox.height);
+    ctx.fillRect(Math.floor(sBox.x - cameraX), Math.floor(sBox.y), sBox.width, sBox.height);
     ctx.fillStyle = '#8090d0';
-    ctx.fillRect(Math.floor(sBox.x) + 1, Math.floor(sBox.y) + 2, sBox.width - 2, sBox.height - 4);
+    ctx.fillRect(Math.floor(sBox.x - cameraX) + 1, Math.floor(sBox.y) + 2, sBox.width - 2, sBox.height - 4);
 
     // Sword stab
     if (player.attacking) {
@@ -1099,20 +1162,21 @@
       // Lower sword when crouching
       const baseOffset = player.crouching ? player.height - TILE_SIZE / 2 : TILE_SIZE - swordWidth;
       const swordY = player.y + baseOffset;
-      ctx.fillRect(Math.floor(swordX), Math.floor(swordY), swordLength, swordWidth);
+      ctx.fillRect(Math.floor(swordX - cameraX), Math.floor(swordY), swordLength, swordWidth);
 
       // Hilt
       ctx.fillStyle = '#c8a060';
       const hiltX = player.facing > 0
         ? swordX - 3
         : swordX + swordLength - 1;
-      ctx.fillRect(Math.floor(hiltX), Math.floor(swordY - 2), 6, 2);
+      ctx.fillRect(Math.floor(hiltX - cameraX), Math.floor(swordY - 2), 6, 2);
     }
   }
 
   // Main game loop that advances simulation and rendering frames.
   function loop() {
     updatePlayer();
+    updateCamera();
     updateOctorok();
     updateRocksAndParticles();
 
@@ -1128,14 +1192,14 @@
     // Iterate over every active projectile to display it.
     for (const rock of rocks) {
       ctx.fillStyle = '#d0b090';
-      ctx.fillRect(Math.floor(rock.x), Math.floor(rock.y), rock.size, rock.size);
+      ctx.fillRect(Math.floor(rock.x - cameraX), Math.floor(rock.y), rock.size, rock.size);
     }
 
     // Draw particles
     // Iterate across each particle puff to render the debris cloud.
     for (const p of particles) {
       ctx.fillStyle = 'rgba(255, 220, 160, 0.8)';
-      ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 2, 2);
+      ctx.fillRect(Math.floor(p.x - cameraX), Math.floor(p.y), 2, 2);
     }
 
     requestAnimationFrame(loop);
