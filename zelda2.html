@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Zelda II HTML5 Prototype</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #000;
+      color: #fff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    canvas {
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      margin: 0 auto;
+      background: #202048;
+    }
+    #info {
+      text-align: center;
+      margin-top: 8px;
+      font-size: 14px;
+    }
+    #info kbd {
+      padding: 1px 4px;
+      border-radius: 3px;
+      border: 1px solid #555;
+      background: #222;
+      font-family: monospace;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+<canvas id="game" width="512" height="288"></canvas>
+<div id="info">
+  Controls:
+  <kbd>W</kbd>/<kbd>A</kbd>/<kbd>S</kbd>/<kbd>D</kbd> move &amp; crouch,
+  <kbd>K</kbd> jump,
+  <kbd>J</kbd> stab
+</div>
+
+<script>
+  // Basic Zelda II style platformer prototype
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  // World / tile setup
+  const TILE_SIZE = 16;
+  const WORLD_COLS = Math.floor(canvas.width / TILE_SIZE);
+  const WORLD_ROWS = Math.floor(canvas.height / TILE_SIZE);
+
+  // Simple tile map: 0 = empty, 1 = solid
+  const world = [];
+  for (let y = 0; y < WORLD_ROWS; y++) {
+    const row = [];
+    for (let x = 0; x < WORLD_COLS; x++) {
+      // Ground
+      if (y === WORLD_ROWS - 2 || y === WORLD_ROWS - 1) {
+        row.push(1);
+      } else if (y === WORLD_ROWS - 6 && x > 5 && x < 12) {
+        // Floating platform
+        row.push(1);
+      } else {
+        row.push(0);
+      }
+    }
+    world.push(row);
+  }
+
+  // Player properties: 2 tiles tall, 1 tile wide
+  const player = {
+    x: 4 * TILE_SIZE,
+    y: (WORLD_ROWS - 4) * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE * 2,
+    standHeight: TILE_SIZE * 2,
+    crouchHeight: Math.floor(TILE_SIZE * 1.5),
+    vx: 0,
+    vy: 0,
+    speed: 2.2,
+    jumpSpeed: -7,
+    gravity: 0.35,
+    maxFall: 10,
+    onGround: false,
+    facing: 1, // 1 right, -1 left
+    crouching: false,
+    attacking: false,
+    attackTimer: 0,
+    hitTimer: 0,
+    attackWindup: 2,
+    attackStab: 6,
+    attackRecover: 3,
+    get attackDuration() {
+      return this.attackWindup + this.attackStab + this.attackRecover;
+    }
+  };
+
+  // Simple Octorok enemy: 1 tile high
+  const octorok = {
+    x: 19 * TILE_SIZE,
+    y: (WORLD_ROWS - 3) * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE,
+    vx: 0,
+    vy: 0,
+    gravity: 0.30,
+    maxFall: 8,
+    onGround: false,
+    jumpSpeed: -3.4,
+    hitTimer: 0,
+    prevVy: 0,
+    shotThisJump: false,
+    state: 'waitAfterShot', // initial delay before starting pattern
+    stateTimer: 120
+  };
+
+  const rocks = [];
+  const particles = [];
+
+  // Input
+  const keys = {
+    w: false,
+    a: false,
+    s: false,
+    d: false,
+    j: false,
+    k: false
+  };
+
+  window.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (k in keys) {
+      keys[k] = true;
+      e.preventDefault();
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = e.key.toLowerCase();
+    if (k in keys) {
+      keys[k] = false;
+      e.preventDefault();
+    }
+  });
+
+  function tileAtPixel(x, y) {
+    const tx = Math.floor(x / TILE_SIZE);
+    const ty = Math.floor(y / TILE_SIZE);
+    if (tx < 0 || ty < 0 || tx >= WORLD_COLS || ty >= WORLD_ROWS) return 1; // treat outside as solid
+    return world[ty][tx];
+  }
+
+  function rectVsWorld(x, y, width, height) {
+    // Check multiple points along the edges so we don't slip into tiles from the side
+    const left = x;
+    const right = x + width;
+    const top = y;
+    const bottom = y + height;
+    const midY = (top + bottom) / 2;
+
+    if (tileAtPixel(left, top)) return true;
+    if (tileAtPixel(right - 1, top)) return true;
+    if (tileAtPixel(left, midY)) return true;
+    if (tileAtPixel(right - 1, midY)) return true;
+    if (tileAtPixel(left, bottom - 1)) return true;
+    if (tileAtPixel(right - 1, bottom - 1)) return true;
+    return false;
+  }
+
+  function swordHitbox() {
+    if (!player.attacking) return null;
+    const t = player.attackTimer;
+    if (t < player.attackWindup || t >= player.attackWindup + player.attackStab) return null;
+
+    // Match the main stab phase sword position roughly
+    const swordLength = TILE_SIZE;
+    const swordWidth = 4;
+    const x = player.facing > 0 ? player.x + player.width : player.x - swordLength;
+    const baseOffset = player.crouching ? player.height - TILE_SIZE / 2 : TILE_SIZE - swordWidth;
+    const y = player.y + baseOffset;
+    return { x, y, width: swordLength, height: swordWidth };
+  }
+
+  function rectsOverlap(a, b) {
+    return !(
+      a.x + a.width <= b.x ||
+      a.x >= b.x + b.width ||
+      a.y + a.height <= b.y ||
+      a.y >= b.y + b.height
+    );
+  }
+
+  function spawnRock(x, y, vx, vy) {
+    rocks.push({
+      x,
+      y,
+      vx,
+      vy,
+      size: 6,
+      alive: true
+    });
+  }
+
+  function spawnRockExplosion(x, y) {
+    const count = 8;
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count;
+      const speed = 1.5 + Math.random();
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 18
+      });
+    }
+  }
+
+  function updateOctorok() {
+    octorok.prevVy = octorok.vy;
+
+    // State machine: jump+shoot -> wait -> ground shoot -> wait -> repeat
+    // Disabled while in hitstun
+    if (octorok.hitTimer === 0) {
+      if (octorok.state === 'waitAfterShot' || octorok.state === 'waitAfterJump') {
+        if (octorok.stateTimer > 0) {
+          octorok.stateTimer--;
+        }
+        if (octorok.stateTimer <= 0) {
+          if (octorok.state === 'waitAfterShot') {
+            // Begin jump phase
+            if (octorok.onGround) {
+              octorok.vy = octorok.jumpSpeed;
+              octorok.onGround = false;
+            }
+            octorok.shotThisJump = false;
+            octorok.state = 'jump';
+          } else if (octorok.state === 'waitAfterJump') {
+            // Grounded shot
+            const mouthSize = 4;
+            const mouthX = octorok.x - 2;
+            const mouthY = octorok.y + octorok.height / 2 - mouthSize / 2;
+            spawnRock(mouthX - 2, mouthY, -2.5, 0);
+            // Now wait again before the next jump+shoot
+            octorok.state = 'waitAfterShot';
+            octorok.stateTimer = 60;
+          }
+        }
+      }
+    }
+
+    // Gravity
+    octorok.vy += octorok.gravity;
+    if (octorok.vy > octorok.maxFall) octorok.vy = octorok.maxFall;
+
+    // Horizontal movement from knockback
+    let newX = octorok.x + octorok.vx;
+    if (!rectVsWorld(newX, octorok.y, octorok.width, octorok.height)) {
+      octorok.x = newX;
+    } else {
+      octorok.vx = 0;
+    }
+
+    // Vertical collision
+    let newY = octorok.y + octorok.vy;
+    if (!rectVsWorld(octorok.x, newY, octorok.width, octorok.height)) {
+      octorok.y = newY;
+      octorok.onGround = false;
+    } else {
+      if (octorok.vy > 0) {
+        while (!rectVsWorld(octorok.x, octorok.y + 1, octorok.width, octorok.height)) {
+          octorok.y += 1;
+        }
+        octorok.onGround = true;
+        if (octorok.state === 'jump') {
+          octorok.state = 'waitAfterJump';
+          octorok.stateTimer = 60;
+        }
+      } else if (octorok.vy < 0) {
+        while (!rectVsWorld(octorok.x, octorok.y - 1, octorok.width, octorok.height)) {
+          octorok.y -= 1;
+        }
+      }
+      octorok.vy = 0;
+    }
+
+    // Friction on ground for knockback
+    if (octorok.onGround) {
+      octorok.vx *= 0.85;
+      if (Math.abs(octorok.vx) < 0.05) octorok.vx = 0;
+    }
+
+    const wasHit = octorok.hitTimer > 0;
+    if (octorok.hitTimer > 0) {
+      octorok.hitTimer--;
+    }
+
+    // Shoot a rock at the apex of the jump during the jump phase (no shooting while in hitstun)
+    if (octorok.hitTimer === 0 &&
+        !octorok.onGround && !octorok.shotThisJump &&
+        octorok.prevVy <= 0 && octorok.vy > 0 &&
+        octorok.state === 'jump') {
+      const mouthSize = 4;
+      const mouthX = octorok.x - 2;
+      const mouthY = octorok.y + octorok.height / 2 - mouthSize / 2;
+      spawnRock(mouthX - 2, mouthY, -2.5, 0);
+      octorok.shotThisJump = true;
+    }
+
+    // When hitstun ends, reset the pattern
+    if (wasHit && octorok.hitTimer === 0) {
+      octorok.state = 'waitAfterShot';
+      octorok.stateTimer = 60;
+      octorok.shotThisJump = false;
+    }
+  }
+
+  function shieldHitbox() {
+    const shieldWidth = TILE_SIZE * 0.6;
+    const shieldHeight = TILE_SIZE;
+    let shieldY;
+    if (player.crouching) {
+      shieldY = player.y + player.height - shieldHeight;
+    } else {
+      shieldY = player.y + TILE_SIZE * 0.2;
+    }
+    let shieldX;
+    if (player.facing > 0) {
+      shieldX = player.x + player.width - shieldWidth + 1;
+    } else {
+      shieldX = player.x - 1;
+    }
+    return {
+      x: shieldX,
+      y: shieldY,
+      width: shieldWidth,
+      height: shieldHeight
+    };
+  }
+
+  function updateRocksAndParticles() {
+    // Rocks
+    for (const rock of rocks) {
+      if (!rock.alive) continue;
+      rock.x += rock.vx;
+      rock.y += rock.vy;
+
+      const rockBox = {
+        x: rock.x,
+        y: rock.y,
+        width: rock.size,
+        height: rock.size
+      };
+
+      const shieldBox = shieldHitbox();
+      const playerBox = {
+        x: player.x,
+        y: player.y,
+        width: player.width,
+        height: player.height
+      };
+
+      let exploded = false;
+      // Shield blocks the rock
+      if (rectsOverlap(rockBox, shieldBox)) {
+        exploded = true;
+      } else if (rectsOverlap(rockBox, playerBox) && player.hitTimer === 0) {
+        // Hit the player
+        player.hitTimer = 24;
+        const playerCenter = player.x + player.width / 2;
+        const projCenter = rock.x + rock.size / 2;
+        const dir = playerCenter < projCenter ? -1 : 1;
+        player.vx = dir * 3.0;
+        player.vy = -4;
+        player.attacking = false;
+        player.attackTimer = 0;
+        exploded = true;
+      }
+
+      // Offscreen
+      if (rock.x + rock.size < 0 || rock.x > canvas.width ||
+          rock.y + rock.size < 0 || rock.y > canvas.height) {
+        exploded = true;
+      }
+
+      if (exploded) {
+        rock.alive = false;
+        spawnRockExplosion(rock.x + rock.size / 2, rock.y + rock.size / 2);
+      }
+    }
+
+    // Compact rocks array
+    for (let i = rocks.length - 1; i >= 0; i--) {
+      if (!rocks[i].alive) rocks.splice(i, 1);
+    }
+
+    // Particles
+    for (const p of particles) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.05;
+      p.life--;
+    }
+    for (let i = particles.length - 1; i >= 0; i--) {
+      if (particles[i].life <= 0) particles.splice(i, 1);
+    }
+  }
+
+  function updatePlayer() {
+    // Horizontal input (used for facing even while attacking)
+    let inputDir = 0;
+    if (keys.a) inputDir -= 1;
+    if (keys.d) inputDir += 1;
+
+    const lockMovement = (player.attacking && player.onGround) || player.hitTimer > 0;
+    const moveX = lockMovement ? 0 : inputDir;
+
+    // Crouch (S) can be used on ground or in air,
+    // but you can't change crouch state during an attack
+    const wasCrouching = player.crouching;
+    if (!player.attacking && player.hitTimer === 0) {
+      player.crouching = keys.s;
+    }
+
+    // Adjust collision box when crouching / standing
+    if (player.crouching !== wasCrouching) {
+      if (player.crouching) {
+        const delta = player.standHeight - player.crouchHeight;
+        player.y += delta;
+        player.height = player.crouchHeight;
+      } else {
+        const delta = player.standHeight - player.crouchHeight;
+        const newY = player.y - delta;
+        // Only stand up if there is room
+        if (!rectVsWorld(player.x, newY, player.width, player.standHeight)) {
+          player.y = newY;
+          player.height = player.standHeight;
+        } else {
+          player.crouching = true;
+        }
+      }
+    }
+
+    // Facing direction (ignore zero movement)
+    if (inputDir !== 0) {
+      player.facing = inputDir > 0 ? 1 : -1;
+    }
+
+    // Apply horizontal velocity (no air control damping)
+    // During hit-stun, preserve knockback velocity instead of overriding it
+    if (player.hitTimer === 0) {
+      player.vx = moveX * player.speed;
+    }
+
+    // Jump (K)
+    if (keys.k && player.onGround && !player.attacking && player.hitTimer === 0) {
+      player.vy = player.jumpSpeed;
+      player.onGround = false;
+    }
+
+    // Gravity
+    player.vy += player.gravity;
+    if (player.vy > player.maxFall) player.vy = player.maxFall;
+
+    // Horizontal collision
+    let newX = player.x + player.vx;
+    if (!rectVsWorld(newX, player.y, player.width, player.height)) {
+      player.x = newX;
+    } else {
+      // slide
+      while (!rectVsWorld(player.x + Math.sign(player.vx), player.y, player.width, player.height)) {
+        player.x += Math.sign(player.vx);
+      }
+      player.vx = 0;
+    }
+
+    // Vertical collision
+    let newY = player.y + player.vy;
+    if (!rectVsWorld(player.x, newY, player.width, player.height)) {
+      player.y = newY;
+      player.onGround = false;
+    } else {
+      if (player.vy > 0) {
+        // Landing on ground
+        while (!rectVsWorld(player.x, player.y + 1, player.width, player.height)) {
+          player.y += 1;
+        }
+        player.onGround = true;
+      } else if (player.vy < 0) {
+        // Hitting ceiling
+        while (!rectVsWorld(player.x, player.y - 1, player.width, player.height)) {
+          player.y -= 1;
+        }
+      }
+      player.vy = 0;
+    }
+
+    // Attack (J) - standing or crouching allowed
+    if (keys.j && !player.attacking && player.hitTimer === 0) {
+      player.attacking = true;
+      player.attackTimer = 0;
+    }
+
+    if (player.attacking) {
+      player.attackTimer++;
+      if (player.attackTimer >= player.attackDuration) {
+        player.attacking = false;
+        player.attackTimer = 0;
+      }
+    }
+
+    if (player.hitTimer > 0) {
+      player.hitTimer--;
+    }
+
+    // Sword vs Octorok
+    const sword = swordHitbox();
+    if (sword && rectsOverlap(sword, octorok) && octorok.hitTimer === 0) {
+      octorok.hitTimer = 10;
+      const knockDir = player.facing;
+      octorok.vx = 3 * knockDir;
+      octorok.vy = -2.5;
+    }
+
+    // Player touching Octorok -> knockback + flash
+    if (player.hitTimer === 0) {
+      const playerBox = {
+        x: player.x,
+        y: player.y,
+        width: player.width,
+        height: player.height
+      };
+      if (rectsOverlap(playerBox, octorok)) {
+        player.hitTimer = 24;
+        const playerCenter = player.x + player.width / 2;
+        const enemyCenter = octorok.x + octorok.width / 2;
+        const dir = playerCenter < enemyCenter ? -1 : 1; // knock away from enemy
+
+        // Immediately separate horizontally so we don't stay overlapping
+        if (dir < 0) {
+          player.x = octorok.x - player.width - 1;
+        } else {
+          player.x = octorok.x + octorok.width + 1;
+        }
+
+        player.vx = dir * 3.2;
+        player.vy = -4;
+        player.attacking = false;
+        player.attackTimer = 0;
+      }
+    }
+  }
+
+  function drawWorld() {
+    for (let y = 0; y < WORLD_ROWS; y++) {
+      for (let x = 0; x < WORLD_COLS; x++) {
+        if (world[y][x] === 1) {
+          ctx.fillStyle = '#303060';
+          ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          ctx.fillStyle = '#505090';
+          ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, 4);
+        }
+      }
+    }
+  }
+
+  function drawOctorok() {
+    const x = Math.floor(octorok.x);
+    const y = Math.floor(octorok.y);
+    const w = octorok.width;
+    const h = octorok.height;
+
+    // Flash when hit
+    if (octorok.hitTimer > 0 && (octorok.hitTimer % 4 < 2)) {
+      ctx.fillStyle = '#ffffff';
+    } else {
+      ctx.fillStyle = '#ff7040';
+    }
+    ctx.fillRect(x, y, w, h);
+
+    // Simple eyes
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(x + 3, y + 4, 3, 3);
+    ctx.fillRect(x + w - 6, y + 4, 3, 3);
+
+    // Little mouth on its left side
+    ctx.fillStyle = '#602020';
+    const mouthWidth = 4;
+    const mouthHeight = 3;
+    const mouthX = x - 1;
+    const mouthY = y + h / 2 - mouthHeight / 2;
+    ctx.fillRect(Math.floor(mouthX), Math.floor(mouthY), mouthWidth, mouthHeight);
+  }
+
+  function drawPlayer() {
+    // Base body color (flash when hit)
+    if (player.hitTimer > 0 && (player.hitTimer % 4 < 2)) {
+      ctx.fillStyle = '#ffffff';
+    } else {
+      ctx.fillStyle = '#ffcc66';
+    }
+
+    // Body (simple rectangle)
+    ctx.fillRect(Math.floor(player.x), Math.floor(player.y), player.width, player.height);
+
+    // Head (top section)
+    const headHeight = Math.min(TILE_SIZE, player.height);
+    if (player.hitTimer > 0 && (player.hitTimer % 4 < 2)) {
+      ctx.fillStyle = '#ffffff';
+    } else {
+      ctx.fillStyle = '#ffe6a0';
+    }
+    ctx.fillRect(Math.floor(player.x), Math.floor(player.y), player.width, headHeight);
+
+    // Simple helmet / hair band
+    ctx.fillStyle = '#40a040';
+    ctx.fillRect(Math.floor(player.x), Math.floor(player.y), player.width, 4);
+
+    // Shield (position depends on crouch / stand)
+    const sBox = shieldHitbox();
+    ctx.fillStyle = '#b0c0ff';
+    ctx.fillRect(Math.floor(sBox.x), Math.floor(sBox.y), sBox.width, sBox.height);
+    ctx.fillStyle = '#8090d0';
+    ctx.fillRect(Math.floor(sBox.x) + 1, Math.floor(sBox.y) + 2, sBox.width - 2, sBox.height - 4);
+
+    // Sword stab
+    if (player.attacking) {
+      const t = player.attackTimer;
+      let phase = 'recover';
+      if (t < player.attackWindup) {
+        phase = 'windup';
+      } else if (t < player.attackWindup + player.attackStab) {
+        phase = 'stab';
+      }
+
+      // Length / offset by phase
+      let swordLength = TILE_SIZE;
+      let forwardAdjust = 0;
+      if (phase === 'windup') {
+        swordLength = TILE_SIZE / 2;
+        forwardAdjust = -swordLength / 2;
+      } else if (phase === 'recover') {
+        swordLength = TILE_SIZE / 2;
+        forwardAdjust = -swordLength / 4;
+      }
+
+      ctx.fillStyle = '#f8f8f8';
+      const swordWidth = 4;
+      const swordX = player.facing > 0
+        ? player.x + player.width + forwardAdjust
+        : player.x - swordLength - forwardAdjust;
+      // Lower sword when crouching
+      const baseOffset = player.crouching ? player.height - TILE_SIZE / 2 : TILE_SIZE - swordWidth;
+      const swordY = player.y + baseOffset;
+      ctx.fillRect(Math.floor(swordX), Math.floor(swordY), swordLength, swordWidth);
+
+      // Hilt
+      ctx.fillStyle = '#c8a060';
+      const hiltX = player.facing > 0
+        ? swordX - 3
+        : swordX + swordLength - 1;
+      ctx.fillRect(Math.floor(hiltX), Math.floor(swordY - 2), 6, 2);
+    }
+  }
+
+  function loop() {
+    updatePlayer();
+    updateOctorok();
+    updateRocksAndParticles();
+
+    // Clear
+    ctx.fillStyle = '#202048';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    drawWorld();
+    drawPlayer();
+    drawOctorok();
+
+    // Draw rocks
+    for (const rock of rocks) {
+      ctx.fillStyle = '#d0b090';
+      ctx.fillRect(Math.floor(rock.x), Math.floor(rock.y), rock.size, rock.size);
+    }
+
+    // Draw particles
+    for (const p of particles) {
+      ctx.fillStyle = 'rgba(255, 220, 160, 0.8)';
+      ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 2, 2);
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  loop();
+</script>
+</body>
+</html>
