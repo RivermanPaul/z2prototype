@@ -247,6 +247,11 @@
     screen.orientation.lock('landscape').catch(() => {});
   }
 
+  // Game mode flags so we can swap between the side-view and overworld engines.
+  const GAME_MODE_SIDE_SCROLL = 'side-scroll';
+  const GAME_MODE_OVERWORLD = 'overworld';
+  let gameMode = GAME_MODE_SIDE_SCROLL;
+
   // World / tile setup
   const TILE_SIZE = 16;
   const WORLD_ROWS = Math.floor(canvas.height / TILE_SIZE);
@@ -496,6 +501,70 @@
       return this.attackWindup + this.attackStab + this.attackRecover;
     }
   };
+
+  // Define the top-down overworld tile grid so moving left of the starting room switches engines.
+  const overworldLayout = [
+    'MMMMMMMMMMMMMMMMMMM',
+    'MGGGGGGGGGGGGGGGGGM',
+    'MGGGGGGGGGGGGGGGGGM',
+    'MGGGGGWWWGGGGGGGGGM',
+    'MGGTGWWWWWGGGGGGGGM',
+    'MGGTPPPWWWPPPGGGGGM',
+    'MGGGPPPWWWPPPGGGGGP',
+    'MGGGGWWWWWGGGGGGGGM',
+    'MGGGGGWWWGGGGGGGGGM',
+    'MGGGGGGGGGGGGGGGGGM',
+    'MGGGGGGGGGGGGGGGGGM',
+    'MMMMMMMMMMMMMMMMMMM'
+  ];
+
+  // Track overworld state independently from the side-scrolling engine.
+  const overworldState = {
+    tileSize: TILE_SIZE,
+    map: overworldLayout,
+    width: overworldLayout[0].length,
+    height: overworldLayout.length,
+    playerTileX: overworldLayout[0].length - 2,
+    playerTileY: 6,
+    moving: false,
+    moveFrom: { x: 0, y: 0 },
+    moveTo: { x: 0, y: 0 },
+    moveTimer: 0,
+    moveDuration: 8,
+    facing: 'left'
+  };
+
+  // Reset Link's side-view pose when returning from the overworld.
+  function resetSideViewPlayerPosition() {
+    player.x = TILE_SIZE * 2;
+    player.y = (WORLD_ROWS - 4) * TILE_SIZE;
+    player.vx = 0;
+    player.vy = 0;
+    player.onGround = true;
+    player.attacking = false;
+    player.attackTimer = 0;
+    player.blockedThisSwing = false;
+    player.crouching = false;
+    cameraX = 0;
+    lastAttackPressed = false;
+    lastJumpPressed = false;
+  }
+
+  // Enter the overworld when Link exits the starting room to the left.
+  function enterOverworldFromSideView() {
+    gameMode = GAME_MODE_OVERWORLD;
+    overworldState.playerTileX = overworldState.width - 2;
+    overworldState.playerTileY = 6;
+    overworldState.moving = false;
+    overworldState.moveTimer = 0;
+    overworldState.facing = 'left';
+  }
+
+  // Return to the side-scrolling engine after walking back to the right edge of the overworld.
+  function returnToSideScrollFromOverworld() {
+    gameMode = GAME_MODE_SIDE_SCROLL;
+    resetSideViewPlayerPosition();
+  }
 
   const rocks = [];
   const particles = [];
@@ -755,6 +824,142 @@
       // Clear every button when the tab loses focus to avoid stuck inputs.
       releasePointerFromButtons();
     });
+  }
+
+  // Determine whether an overworld tile is passable based on its symbol.
+  function overworldTileWalkable(tileChar) {
+    return tileChar === 'G' || tileChar === 'P' || tileChar === 'T';
+  }
+
+  // Retrieve the tile character at the requested overworld coordinate, defaulting to mountains when out of bounds.
+  function overworldTileAt(x, y) {
+    if (y < 0 || y >= overworldState.height || x < 0 || x >= overworldState.width) {
+      return 'M';
+    }
+    return overworldState.map[y][x];
+  }
+
+  // Handle tile-based overworld movement using discrete steps between grid cells.
+  function updateOverworld() {
+    const inputKeys = combinedInputKeys();
+
+    // Advance any in-progress movement so Link smoothly glides between tiles.
+    if (overworldState.moving) {
+      overworldState.moveTimer++;
+      // Stop stepping once the move timer reaches the configured duration.
+      if (overworldState.moveTimer >= overworldState.moveDuration) {
+        overworldState.playerTileX = overworldState.moveTo.x;
+        overworldState.playerTileY = overworldState.moveTo.y;
+        overworldState.moving = false;
+        overworldState.moveTimer = 0;
+        // Transition back to the side-view once the player walks off the right edge bridge.
+        if (overworldState.playerTileX >= overworldState.width - 1 && overworldState.facing === 'right') {
+          returnToSideScrollFromOverworld();
+        }
+      }
+      return;
+    }
+
+    // Build an ordered list of desired movement directions so only one tile move occurs per step.
+    const desiredMoves = [];
+    // Honor upward input by queuing a move to the north tile.
+    if (inputKeys.w) desiredMoves.push({ dx: 0, dy: -1, facing: 'up' });
+    // Honor downward input by queuing a move to the south tile.
+    if (inputKeys.s) desiredMoves.push({ dx: 0, dy: 1, facing: 'down' });
+    // Honor leftward input by queuing a move to the west tile.
+    if (inputKeys.a) desiredMoves.push({ dx: -1, dy: 0, facing: 'left' });
+    // Honor rightward input by queuing a move to the east tile.
+    if (inputKeys.d) desiredMoves.push({ dx: 1, dy: 0, facing: 'right' });
+
+    // Attempt the first requested direction to keep controls predictable.
+    for (const move of desiredMoves) {
+      const targetX = overworldState.playerTileX + move.dx;
+      const targetY = overworldState.playerTileY + move.dy;
+      const targetTile = overworldTileAt(targetX, targetY);
+      // Start a new tile step only when the destination is walkable.
+      if (overworldTileWalkable(targetTile)) {
+        overworldState.facing = move.facing;
+        overworldState.moving = true;
+        overworldState.moveFrom = { x: overworldState.playerTileX, y: overworldState.playerTileY };
+        overworldState.moveTo = { x: targetX, y: targetY };
+        overworldState.moveTimer = 0;
+        break;
+      }
+    }
+  }
+
+  // Render the overworld top-down map using simple color-coded tiles.
+  function drawOverworld() {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Loop through each tile to paint the landscape.
+    for (let y = 0; y < overworldState.height; y++) {
+      // Walk every column of the current row to lay down its tile color.
+      for (let x = 0; x < overworldState.width; x++) {
+        const tile = overworldState.map[y][x];
+        const px = x * overworldState.tileSize + TILE_SIZE * 2;
+        const py = y * overworldState.tileSize + TILE_SIZE * 2;
+        // Choose a fill color that matches the tile's terrain type.
+        if (tile === 'G') {
+          ctx.fillStyle = '#7bb858';
+        } else if (tile === 'P') {
+          ctx.fillStyle = '#d7c06a';
+        } else if (tile === 'W') {
+          ctx.fillStyle = '#4a6cff';
+        } else if (tile === 'T') {
+          ctx.fillStyle = '#e6e6e6';
+        } else {
+          ctx.fillStyle = '#8c5a32';
+        }
+        ctx.fillRect(px, py, overworldState.tileSize, overworldState.tileSize);
+        // Add a darker outline to water and temple tiles for clarity.
+        if (tile === 'W' || tile === 'T') {
+          ctx.strokeStyle = tile === 'W' ? '#2e3d8f' : '#a8a8a8';
+          ctx.strokeRect(px + 0.5, py + 0.5, overworldState.tileSize - 1, overworldState.tileSize - 1);
+        }
+      }
+    }
+
+    // Draw the destination temple so it stands out above the base tile color.
+    const templeX = 3 * overworldState.tileSize + TILE_SIZE * 2;
+    const templeY = 4 * overworldState.tileSize + TILE_SIZE * 2;
+    ctx.fillStyle = '#f4f4f4';
+    ctx.fillRect(templeX + 4, templeY + 2, overworldState.tileSize - 8, overworldState.tileSize - 4);
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(templeX + 6, templeY + 6, overworldState.tileSize - 12, overworldState.tileSize - 10);
+
+    // Compute the player's interpolated position while stepping between tiles.
+    const progress = overworldState.moving
+      ? Math.min(1, overworldState.moveTimer / overworldState.moveDuration)
+      : 0;
+    const baseX = overworldState.playerTileX * overworldState.tileSize;
+    const baseY = overworldState.playerTileY * overworldState.tileSize;
+    const targetOffsetX = overworldState.moving
+      ? (overworldState.moveTo.x - overworldState.moveFrom.x) * overworldState.tileSize
+      : 0;
+    const targetOffsetY = overworldState.moving
+      ? (overworldState.moveTo.y - overworldState.moveFrom.y) * overworldState.tileSize
+      : 0;
+    const playerDrawX = TILE_SIZE * 2 + baseX + targetOffsetX * progress;
+    const playerDrawY = TILE_SIZE * 2 + baseY + targetOffsetY * progress;
+
+    // Render Link as a tiny adventurer sprite with a directional arrow to hint at facing.
+    ctx.fillStyle = '#2f9e44';
+    ctx.fillRect(playerDrawX + 4, playerDrawY + 4, overworldState.tileSize - 8, overworldState.tileSize - 8);
+    ctx.fillStyle = '#ffe6a0';
+    ctx.fillRect(playerDrawX + 6, playerDrawY + 6, overworldState.tileSize - 12, overworldState.tileSize - 12);
+    ctx.fillStyle = '#ffffff';
+    // Point a small notch toward the direction Link last walked to echo the NES-style pointer.
+    if (overworldState.facing === 'left') {
+      ctx.fillRect(playerDrawX + 2, playerDrawY + overworldState.tileSize / 2 - 1, 4, 2);
+    } else if (overworldState.facing === 'right') {
+      ctx.fillRect(playerDrawX + overworldState.tileSize - 6, playerDrawY + overworldState.tileSize / 2 - 1, 4, 2);
+    } else if (overworldState.facing === 'up') {
+      ctx.fillRect(playerDrawX + overworldState.tileSize / 2 - 1, playerDrawY + 2, 2, 4);
+    } else {
+      ctx.fillRect(playerDrawX + overworldState.tileSize / 2 - 1, playerDrawY + overworldState.tileSize - 6, 2, 4);
+    }
   }
 
   // Look up the tile index that occupies the given tile coordinate across any area.
@@ -1783,9 +1988,14 @@
     }
   }
 
-  // Main game loop that advances simulation and rendering frames.
-  function loop() {
+  // Run one frame of the side-scrolling engine, including physics, AI, and rendering.
+  function runSideScrollFrame() {
     updatePlayer();
+    // Swap to the overworld as soon as Link leaves the starting room to the left.
+    if (player.x < -TILE_SIZE / 2) {
+      enterOverworldFromSideView();
+      return;
+    }
     updateCamera();
 
     const visibleAreas = getVisibleAreaIndices();
@@ -1848,7 +2058,20 @@
       ctx.fillStyle = 'rgba(255, 220, 160, 0.8)';
       ctx.fillRect(Math.floor(p.x - cameraX), Math.floor(p.y), 2, 2);
     }
+  }
 
+  // Main game loop that advances simulation and rendering frames.
+  function loop() {
+    // Branch between the two engines depending on whether Link is in side-view or overworld mode.
+    if (gameMode === GAME_MODE_SIDE_SCROLL) {
+      runSideScrollFrame();
+    } else {
+      updateOverworld();
+      // Only render the overworld scene when we remain inside that mode after processing movement.
+      if (gameMode === GAME_MODE_OVERWORLD) {
+        drawOverworld();
+      }
+    }
     requestAnimationFrame(loop);
   }
 
