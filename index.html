@@ -261,10 +261,16 @@
   const AREA_COLS = SCREEN_COLS * AREA_SCREEN_COUNT;
   const AREA_WIDTH = AREA_COLS * TILE_SIZE;
   const TOWN_AREA_COUNT = 2;
-  const TOWN_AREA_COLS = AREA_COLS / 2;
-  const TOWN_AREA_WIDTH = AREA_WIDTH / 2;
+  // Each town area is 50% wider than a single screen-width plaza so the camera can scroll before hitting an exit.
+  const TOWN_AREA_COLS = Math.floor((AREA_COLS / 2) * 1.5);
+  const TOWN_AREA_WIDTH = TOWN_AREA_COLS * TILE_SIZE;
   const TOWN_TOTAL_WIDTH = TOWN_AREA_COUNT * TOWN_AREA_WIDTH;
   const TOWN_GROUND_Z = (WORLD_ROWS - 4) * TILE_SIZE;
+  // Width of the invisible connector rectangles that transfer Link between town sections.
+  const TOWN_CONNECTOR_WIDTH = TILE_SIZE * 2;
+  // Vertical band of the connector rectangles so they sit around the walkway depth.
+  const TOWN_CONNECTOR_TOP_Z = TOWN_GROUND_Z - TILE_SIZE * 2;
+  const TOWN_CONNECTOR_BOTTOM_Z = TOWN_GROUND_Z + TILE_SIZE * 0.5;
 
   // Cache of generated areas so we only build each layout once.
   const areaCache = new Map();
@@ -357,6 +363,26 @@
       for (let y = 0; y < WORLD_ROWS; y++) {
         if (y < exitGapStartRow || y > exitGapEndRow) {
           tiles[y][TOWN_AREA_COLS - 1] = 1;
+        }
+      }
+    }
+
+    // Add interior walls between the left and right town areas while leaving a portal gap between them.
+    const portalGapStartRow = WORLD_ROWS - 8;
+    const portalGapEndRow = WORLD_ROWS - 3;
+    // In the left town area, wall off the right edge except for the portal band so the connector acts as a doorway.
+    if (areaIndex === 0) {
+      for (let y = 0; y < WORLD_ROWS; y++) {
+        if (y < portalGapStartRow || y > portalGapEndRow) {
+          tiles[y][TOWN_AREA_COLS - 1] = 1;
+        }
+      }
+    }
+    // In the right town area, wall off the left edge except for the matching portal band.
+    if (areaIndex === 1) {
+      for (let y = 0; y < WORLD_ROWS; y++) {
+        if (y < portalGapStartRow || y > portalGapEndRow) {
+          tiles[y][0] = 1;
         }
       }
     }
@@ -563,8 +589,9 @@
   // Update the raised-view camera so it follows Link across the fixed-length town strip.
   function updateTownCamera() {
     const target = player.x + player.width / 2 - canvas.width / 2;
+    // Clamp the camera within the current town area's width so each segment scrolls independently.
     const minCam = 0;
-    const maxCam = Math.max(0, TOWN_TOTAL_WIDTH - canvas.width);
+    const maxCam = Math.max(0, TOWN_AREA_WIDTH - canvas.width);
     cameraX = Math.min(Math.max(target, minCam), maxCam);
   }
 
@@ -684,7 +711,9 @@
   // Track contextual data for the raised-view town, including where to return on exit.
   const townState = {
     entryTile: { x: overworldLayout[0].length - 2, y: 6 },
-    entrySide: 'left'
+    entrySide: 'left',
+    // Index of the active town area segment so each plaza behaves like a discrete room.
+    areaIndex: 0
   };
 
   // Reset Link's side-view pose when returning from the overworld.
@@ -707,8 +736,10 @@
 
   // Place Link at the front of the raised-view town while clearing any combat state.
   function resetTownPlayerPosition() {
+    // Start near the appropriate entrance within the active town area while keeping coordinates local to that area.
+    townState.areaIndex = townState.entrySide === 'right' ? 1 : 0;
     player.x = townState.entrySide === 'right'
-      ? TOWN_TOTAL_WIDTH - TILE_SIZE * 3
+      ? TOWN_AREA_WIDTH - TILE_SIZE * 3
       : TILE_SIZE * 2;
     player.y = TOWN_GROUND_Z;
     player.z = TOWN_GROUND_Z;
@@ -724,6 +755,12 @@
     cameraX = 0;
     lastAttackPressed = false;
     lastJumpPressed = false;
+  }
+
+  // Compute the tile column of the interior portal doorway for the active town area.
+  function currentTownPortalColumn() {
+    // Left area uses the rightmost column; right area uses the leftmost column.
+    return townState.areaIndex === 0 ? TOWN_AREA_COLS - 1 : 0;
   }
 
   // Enter the overworld when Link exits the starting room to the left.
@@ -1184,12 +1221,11 @@
   function townTileAtTileCoordinates(tileX, tileY) {
     // Treat vertical out-of-bounds as solid so Link cannot leave the plaza height.
     if (tileY < 0 || tileY >= WORLD_ROWS) return 1;
-    const areaIndex = Math.floor(tileX / TOWN_AREA_COLS);
-    // Treat positions outside the fixed-length town as solid walls.
-    if (areaIndex < 0 || areaIndex >= TOWN_AREA_COUNT) return 1;
-    const localTileX = tileX - areaIndex * TOWN_AREA_COLS;
-    const areaTiles = getTownAreaTiles(areaIndex);
-    return areaTiles[tileY][localTileX];
+    // Treat horizontal out-of-bounds as solid so Link cannot walk beyond the local plaza width.
+    if (tileX < 0 || tileX >= TOWN_AREA_COLS) return 1;
+    // Resolve tiles using the active town area index so each segment behaves like a discrete room.
+    const areaTiles = getTownAreaTiles(townState.areaIndex || 0);
+    return areaTiles[tileY][tileX];
   }
 
   // Look up the tile index inside the raised-view town at the requested pixel coordinate.
@@ -1262,6 +1298,9 @@
     if (townTileAtPixel(right - 1, bottom - 1)) return true;
     return false;
   }
+
+  // Track debug information for the raised-view town connectors so it can be drawn on screen.
+  let debugTownConnectorInfo = '';
 
   // Build the sword's collision box when Link is in the stab phase of his attack.
   function swordHitbox() {
@@ -2053,6 +2092,11 @@
     if (player.onGround && inputKeys.w) moveZ -= 1;
     // Honor downward input by adding to the depth axis to walk toward the camera while grounded.
     if (player.onGround && inputKeys.s) moveZ += 1;
+    // Mirror the side-view rule by freezing movement during ground attacks and hitstun so Link cannot walk while swinging.
+    if ((player.attacking && player.onGround) || player.hitTimer > 0) {
+      moveX = 0;
+      moveZ = 0;
+    }
 
     // Normalize diagonal walks so pace remains consistent in every direction.
     const magnitude = Math.hypot(moveX, moveZ);
@@ -2092,32 +2136,63 @@
 
     const proposedX = player.x + scaledMoveX;
     const proposedZ = player.z + scaledMoveZ;
-    const proposedRight = proposedX + player.width;
     // Track the intended horizontal position so we can reroute exits without losing the original intent.
     let adjustedX = proposedX;
-    // Identify which half of town Link currently occupies so we can route exits correctly.
-    const currentTownArea = Math.floor(player.x / TOWN_AREA_WIDTH);
-    const currentAreaStart = currentTownArea * TOWN_AREA_WIDTH;
-    const currentAreaEnd = currentAreaStart + TOWN_AREA_WIDTH;
 
     // Exit back to the overworld once Link walks beyond the outer edges of the active plaza strip.
-    // Step out to the overworld when moving past the far left border.
+    // When standing in the left town area, walking past the far left border leaves to the overworld.
     if (adjustedX < 0) {
-      returnToOverworldFromTown('left');
-      return true;
+      if (townState.areaIndex === 0) {
+        returnToOverworldFromTown('left');
+        return true;
+      } else {
+        // Clamp against the left wall of the right town area so only the connector can move us back.
+        adjustedX = 0;
+      }
     }
-    // Step into the left plaza when walking out of the right plaza's left exit.
-    if (adjustedX < currentAreaStart && currentTownArea > 0) {
-      adjustedX = currentAreaStart - player.width;
+    // When standing in the right town area, walking past the far right border leaves to the overworld.
+    if (adjustedX + player.width > TOWN_AREA_WIDTH) {
+      if (townState.areaIndex === 1) {
+        returnToOverworldFromTown('right');
+        return true;
+      } else {
+        // Clamp against the right wall of the left town area so the connector handles transitions instead.
+        adjustedX = TOWN_AREA_WIDTH - player.width;
+      }
     }
-    // Step into the right plaza when walking out of the left plaza's right exit.
-    if (adjustedX + player.width > currentAreaEnd && currentTownArea < TOWN_AREA_COUNT - 1) {
-      adjustedX = currentAreaEnd;
-    }
-    // Step out to the overworld when moving past the far right border.
-    if (adjustedX + player.width > TOWN_TOTAL_WIDTH) {
-      returnToOverworldFromTown('right');
-      return true;
+
+    // Teleport across town whenever Link walks through the interior doorway at the edge of the current town area.
+    const nextMidX = adjustedX + player.width / 2;
+    const nextMidZ = proposedZ + player.height / 2;
+    const midTileX = Math.floor(nextMidX / TILE_SIZE);
+    const midTileZ = Math.floor(nextMidZ / TILE_SIZE);
+    // Match the interior wall gap we carved into the town tiles.
+    const portalGapStartRow = WORLD_ROWS - 8;
+    const portalGapEndRow = WORLD_ROWS - 3;
+    const portalColumn = currentTownPortalColumn();
+    const withinPortalBand = midTileZ >= portalGapStartRow && midTileZ <= portalGapEndRow;
+    const atPortalColumn = midTileX === portalColumn;
+    const destinationTownArea = townState.areaIndex === 0 ? 1 : 0;
+    const centerOffset = TOWN_AREA_WIDTH / 2;
+    // Record debug information about the connector evaluation so it can be rendered on-screen.
+    debugTownConnectorInfo =
+      'area=' + townState.areaIndex +
+      ' portalX=' + portalColumn +
+      ' tileX=' + midTileX +
+      ' centerOffset=' + centerOffset.toFixed(1);
+    // Warp across town whenever Link's midpoint passes through the interior doorway band.
+    if (atPortalColumn && withinPortalBand) {
+      // Flip to the opposite town area and drop Link just inside its entrance edge using local coordinates.
+      townState.areaIndex = destinationTownArea;
+      const enteringFromLeft = townState.areaIndex === 0;
+      player.x = enteringFromLeft
+        ? TOWN_AREA_WIDTH - TILE_SIZE * 3
+        : TILE_SIZE * 2;
+      player.z = TOWN_GROUND_Z;
+      player.y = player.z;
+      player.vx = 0;
+      player.vy = 0;
+      return false;
     }
 
     // Apply horizontal movement only when the path stays clear of buildings.
@@ -2205,19 +2280,27 @@
   function drawTownWorld() {
     const startTileX = Math.floor(cameraX / TILE_SIZE);
     const endTileX = Math.floor((cameraX + canvas.width) / TILE_SIZE) + 1;
-    // Walk each row in the plaza so we can render any visible scenery tiles.
+    // Walk each row in the plaza so we can render any visible scenery tiles for the active town area.
     for (let y = 0; y < WORLD_ROWS; y++) {
-      // Inspect every column that overlaps the current viewport.
-      for (let tileX = startTileX; tileX <= endTileX; tileX++) {
+      // Inspect every column that overlaps the current viewport, clamped to the local town area width.
+      for (let tileX = startTileX; tileX <= endTileX && tileX < TOWN_AREA_COLS; tileX++) {
         // Render only the solid scenery tiles while skipping open floor.
         if (townTileAtTileCoordinates(tileX, y) === 1) {
           const drawX = tileX * TILE_SIZE - cameraX;
-          ctx.fillStyle = '#2e2e52';
+          // Tint the scenery differently for each town area so it is obvious which segment Link currently occupies.
+          const isLeftTownSegment = townState.areaIndex === 0;
+          ctx.fillStyle = isLeftTownSegment ? '#2e2e52' : '#3a2048';
           ctx.fillRect(drawX, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
-          ctx.fillStyle = '#5a628a';
+          ctx.fillStyle = isLeftTownSegment ? '#5a628a' : '#b86ad7';
           ctx.fillRect(drawX, y * TILE_SIZE, TILE_SIZE, 4);
         }
       }
+    }
+    // Render connector debug info so we can inspect how segments resolve in real time.
+    if (debugTownConnectorInfo) {
+      ctx.fillStyle = '#ff8080';
+      ctx.font = '10px monospace';
+      ctx.fillText(debugTownConnectorInfo, 8, 12);
     }
   }
 
