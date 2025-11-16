@@ -262,6 +262,7 @@
   const AREA_WIDTH = AREA_COLS * TILE_SIZE;
   const TOWN_AREA_COUNT = 2;
   const TOWN_TOTAL_WIDTH = TOWN_AREA_COUNT * AREA_WIDTH;
+  const TOWN_GROUND_Z = (WORLD_ROWS - 4) * TILE_SIZE;
 
   // Cache of generated areas so we only build each layout once.
   const areaCache = new Map();
@@ -329,7 +330,7 @@
         let value = 0;
         const globalX = areaIndex * AREA_COLS + x;
         // Keep the perimeter walls solid so players stay inside the town bounds.
-        if (y === 0 || y === WORLD_ROWS - 1 || globalX === 0 || globalX === TOWN_TOTAL_WIDTH - 1) {
+        if (y === 0 || y === WORLD_ROWS - 1) {
           value = 1;
         }
         row.push(value);
@@ -546,6 +547,7 @@
   const player = {
     x: 4 * TILE_SIZE,
     y: (WORLD_ROWS - 4) * TILE_SIZE,
+    z: (WORLD_ROWS - 4) * TILE_SIZE,
     width: TILE_SIZE,
     height: TILE_SIZE * 2,
     standHeight: TILE_SIZE * 2,
@@ -580,8 +582,8 @@
     'MGGGGGGGGGGGGGGGGGM',
     'MGGGGGGGGGGGGGGGGGM',
     'MGGGGGWWWGGGGGGGGGM',
-    'MGGTGWWWWWGGGGGGGGM',
-    'MGGTPPPWWWPPPGGGGGM',
+    'MGGTTWWWWWGGGGGGGGM',
+    'MGGTTPPWWWPPPGGGGGM',
     'MGGGPPPWWWPPPGGGGGP',
     'MGGGGWWWWWGGGGGGGGM',
     'MGGGGGWWWGGGGGGGGGM',
@@ -607,15 +609,59 @@
     pendingTileInteraction: false
   };
 
+  // Precompute the overworld tiles that represent the town entrance so we can map exits back to each side.
+  const townEntranceTiles = (() => {
+    const tiles = [];
+    // Walk each overworld row to collect every tile that belongs to the town footprint.
+    for (let y = 0; y < overworldLayout.length; y++) {
+      const row = overworldLayout[y];
+      // Step across each column in the current row so we can detect town markers.
+      for (let x = 0; x < row.length; x++) {
+        if (row[x] === 'T') {
+          tiles.push({ x, y });
+        }
+      }
+    }
+    // Handle the edge case where no town tiles exist by returning empty sides.
+    if (tiles.length === 0) return { left: [], right: [] };
+    const minX = Math.min(...tiles.map((t) => t.x));
+    const maxX = Math.max(...tiles.map((t) => t.x));
+    return {
+      left: tiles.filter((t) => t.x === minX),
+      right: tiles.filter((t) => t.x === maxX)
+    };
+  })();
+
+  // Choose the entrance tile on the requested side that is closest to the provided row.
+  function closestTownEntrance(side, targetY) {
+    const candidates = side === 'right' ? townEntranceTiles.right : townEntranceTiles.left;
+    // Skip selection entirely when no candidate tiles exist on that side.
+    if (candidates.length === 0) return null;
+    let best = candidates[0];
+    let bestDistance = Math.abs(best.y - targetY);
+    // Walk through every candidate tile so we can locate the nearest matching row.
+    for (const tile of candidates) {
+      const distance = Math.abs(tile.y - targetY);
+      // Keep whichever tile has the smallest distance to the target row.
+      if (distance < bestDistance) {
+        best = tile;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+
   // Track contextual data for the raised-view town, including where to return on exit.
   const townState = {
-    entryTile: { x: overworldLayout[0].length - 2, y: 6 }
+    entryTile: { x: overworldLayout[0].length - 2, y: 6 },
+    entrySide: 'left'
   };
 
   // Reset Link's side-view pose when returning from the overworld.
   function resetSideViewPlayerPosition() {
     player.x = TILE_SIZE * 2;
     player.y = (WORLD_ROWS - 4) * TILE_SIZE;
+    player.z = player.y;
     player.vx = 0;
     player.vy = 0;
     player.onGround = true;
@@ -631,8 +677,11 @@
 
   // Place Link at the front of the raised-view town while clearing any combat state.
   function resetTownPlayerPosition() {
-    player.x = TILE_SIZE * 2;
-    player.y = (WORLD_ROWS - 4) * TILE_SIZE;
+    player.x = townState.entrySide === 'right'
+      ? TOWN_TOTAL_WIDTH - TILE_SIZE * 3
+      : TILE_SIZE * 2;
+    player.y = TOWN_GROUND_Z;
+    player.z = TOWN_GROUND_Z;
     player.vx = 0;
     player.vy = 0;
     player.onGround = true;
@@ -641,6 +690,7 @@
     player.blockedThisSwing = false;
     player.crouching = false;
     player.height = player.standHeight;
+    player.facing = townState.entrySide === 'right' ? -1 : 1;
     cameraX = 0;
     lastAttackPressed = false;
     lastJumpPressed = false;
@@ -667,18 +717,25 @@
   function enterTownFromOverworld() {
     gameMode = GAME_MODE_RAISED;
     townState.entryTile = { x: overworldState.playerTileX, y: overworldState.playerTileY };
+    // Decide whether this entry came from the left or right side so exits can mirror it.
+    const nearestLeft = closestTownEntrance('left', townState.entryTile.y);
+    const nearestRight = closestTownEntrance('right', townState.entryTile.y);
+    const distanceToLeft = nearestLeft ? Math.abs(nearestLeft.x - townState.entryTile.x) : Infinity;
+    const distanceToRight = nearestRight ? Math.abs(nearestRight.x - townState.entryTile.x) : Infinity;
+    townState.entrySide = distanceToRight < distanceToLeft ? 'right' : 'left';
     resetTownPlayerPosition();
   }
 
   // Return to the overworld from town by restoring the saved tile coordinates.
-  function returnToOverworldFromTown() {
+  function returnToOverworldFromTown(exitSide = townState.entrySide) {
     gameMode = GAME_MODE_OVERWORLD;
-    overworldState.playerTileX = townState.entryTile.x;
-    overworldState.playerTileY = townState.entryTile.y;
+    const destination = closestTownEntrance(exitSide, townState.entryTile.y) || townState.entryTile;
+    overworldState.playerTileX = destination.x;
+    overworldState.playerTileY = destination.y;
     overworldState.moving = false;
     overworldState.moveTimer = 0;
     overworldState.pendingTileInteraction = false;
-    overworldState.facing = 'left';
+    overworldState.facing = exitSide === 'right' ? 'right' : 'left';
   }
 
   const rocks = [];
@@ -1150,21 +1207,21 @@
   }
 
   // Determine whether a rectangle collides with any solid town tiles.
-  function townRectVsWorld(x, y, width, height) {
+  function townRectVsWorld(x, z, width, height) {
     const left = x;
     const right = x + width;
-    const top = y;
-    const bottom = y + height;
-    const midY = (top + bottom) / 2;
+    const top = z;
+    const bottom = z + height;
+    const midZ = (top + bottom) / 2;
 
     // Abort when the top-left corner hits something solid.
     if (townTileAtPixel(left, top)) return true;
     // Abort when the top-right corner hits something solid.
     if (townTileAtPixel(right - 1, top)) return true;
     // Abort when the mid-left sample hits something solid.
-    if (townTileAtPixel(left, midY)) return true;
+    if (townTileAtPixel(left, midZ)) return true;
     // Abort when the mid-right sample hits something solid.
-    if (townTileAtPixel(right - 1, midY)) return true;
+    if (townTileAtPixel(right - 1, midZ)) return true;
     // Abort when the bottom-left corner hits something solid.
     if (townTileAtPixel(left, bottom - 1)) return true;
     // Abort when the bottom-right corner hits something solid.
@@ -1942,57 +1999,86 @@
 
   }
 
-  // Handle free movement inside the raised-view town where up/down map to depth instead of jumping.
+  // Handle free movement inside the raised-view town where up/down map to depth while jumps lift vertically.
   function updateRaisedPlayer() {
     const inputKeys = combinedInputKeys();
 
     // Detect a fresh press of the attack button so holding it down does not chain multiple swings.
     const attackJustPressed = inputKeys.j && !lastAttackPressed;
+    // Detect a fresh jump press so the leap only fires once per key edge.
+    const jumpJustPressed = inputKeys.k && !lastJumpPressed;
 
     // Compute directional intent using both axes so Link can walk diagonally across the plaza.
     let moveX = 0;
-    let moveY = 0;
+    let moveZ = 0;
     // Honor leftward input by subtracting from the horizontal axis.
     if (inputKeys.a) moveX -= 1;
     // Honor rightward input by adding to the horizontal axis.
     if (inputKeys.d) moveX += 1;
-    // Honor upward input by subtracting from the depth axis to walk away from the camera.
-    if (inputKeys.w) moveY -= 1;
-    // Honor downward input by adding to the depth axis to walk toward the camera.
-    if (inputKeys.s) moveY += 1;
+    // Honor upward input by subtracting from the depth axis to walk away from the camera while grounded.
+    if (player.onGround && inputKeys.w) moveZ -= 1;
+    // Honor downward input by adding to the depth axis to walk toward the camera while grounded.
+    if (player.onGround && inputKeys.s) moveZ += 1;
 
     // Normalize diagonal walks so pace remains consistent in every direction.
-    const magnitude = Math.hypot(moveX, moveY);
+    const magnitude = Math.hypot(moveX, moveZ);
     const moveScale = magnitude > 0 ? player.speed / magnitude : 0;
     const scaledMoveX = moveX * moveScale;
-    const scaledMoveY = moveY * moveScale;
+    const scaledMoveZ = moveZ * moveScale;
 
     // Turn to face the most recent horizontal input while leaving vertical strafe unchanged.
     if (moveX !== 0) {
       player.facing = moveX > 0 ? 1 : -1;
     }
 
-    // Keep combat state simple by disabling crouch and jump in the raised view.
+    // Keep combat state simple by disabling crouch in the raised view.
     player.crouching = false;
     player.height = player.standHeight;
-    player.onGround = true;
+
+    // Trigger a leap while grounded so the jump arc does not chain repeatedly.
+    if (jumpJustPressed && player.onGround && !player.attacking && player.hitTimer === 0) {
+      player.onGround = false;
+      player.vy = player.jumpSpeed;
+    }
+
+    // Apply gravity and vertical movement when airborne while keeping depth locked.
+    if (!player.onGround) {
+      player.vy = Math.min(player.vy + player.gravity, player.maxFall);
+      player.y += player.vy;
+      // Snap back to the ground plane when the jump arc finishes.
+      if (player.y >= player.z) {
+        player.y = player.z;
+        player.vy = 0;
+        player.onGround = true;
+      }
+    } else {
+      player.vy = 0;
+      player.y = player.z;
+    }
 
     const proposedX = player.x + scaledMoveX;
-    const proposedY = player.y + scaledMoveY;
+    const proposedZ = player.z + scaledMoveZ;
 
-    // Exit back to the overworld once Link walks past the entrance edge of town.
+    // Exit back to the overworld once Link walks past either entrance edge of town.
     if (proposedX < -TILE_SIZE / 2) {
-      returnToOverworldFromTown();
+      returnToOverworldFromTown('left');
+      return true;
+    }
+    if (proposedX > TOWN_TOTAL_WIDTH - player.width + TILE_SIZE / 2) {
+      returnToOverworldFromTown('right');
       return true;
     }
 
     // Apply horizontal movement only when the path stays clear of buildings.
-    if (!townRectVsWorld(proposedX, player.y, player.width, player.height)) {
+    if (!townRectVsWorld(proposedX, player.z, player.width, player.height)) {
       player.x = proposedX;
     }
-    // Apply vertical movement only when the path stays clear of scenery.
-    if (!townRectVsWorld(player.x, proposedY, player.width, player.height)) {
-      player.y = proposedY;
+    // Apply depth movement only when the path stays clear of scenery and the player is grounded.
+    if (!townRectVsWorld(player.x, proposedZ, player.width, player.height)) {
+      player.z = proposedZ;
+      if (player.onGround) {
+        player.y = player.z;
+      }
     }
 
     // Attack (virtual J) - available for timing practice even without enemies.
@@ -2020,7 +2106,7 @@
 
     // Determine whether Link is currently walking so the animation can advance.
     const currentlyWalking =
-      (Math.abs(scaledMoveX) > 0.05 || Math.abs(scaledMoveY) > 0.05) &&
+      (Math.abs(scaledMoveX) > 0.05 || Math.abs(scaledMoveZ) > 0.05) &&
       player.hitTimer === 0 &&
       !player.attacking;
     player.walking = currentlyWalking;
