@@ -261,7 +261,9 @@
   const AREA_COLS = SCREEN_COLS * AREA_SCREEN_COUNT;
   const AREA_WIDTH = AREA_COLS * TILE_SIZE;
   const TOWN_AREA_COUNT = 2;
-  const TOWN_TOTAL_WIDTH = TOWN_AREA_COUNT * AREA_WIDTH;
+  const TOWN_AREA_COLS = AREA_COLS / 2;
+  const TOWN_AREA_WIDTH = AREA_WIDTH / 2;
+  const TOWN_TOTAL_WIDTH = TOWN_AREA_COUNT * TOWN_AREA_WIDTH;
   const TOWN_GROUND_Z = (WORLD_ROWS - 4) * TILE_SIZE;
 
   // Cache of generated areas so we only build each layout once.
@@ -326,9 +328,8 @@
     for (let y = 0; y < WORLD_ROWS; y++) {
       const row = [];
       // Populate each column of the current row with walkable space by default.
-      for (let x = 0; x < AREA_COLS; x++) {
+      for (let x = 0; x < TOWN_AREA_COLS; x++) {
         let value = 0;
-        const globalX = areaIndex * AREA_COLS + x;
         // Keep the perimeter walls solid so players stay inside the town bounds.
         if (y === 0 || y === WORLD_ROWS - 1) {
           value = 1;
@@ -355,7 +356,7 @@
       // Fill the rightmost column with walls while preserving a doorway opening near the ground.
       for (let y = 0; y < WORLD_ROWS; y++) {
         if (y < exitGapStartRow || y > exitGapEndRow) {
-          tiles[y][AREA_COLS - 1] = 1;
+          tiles[y][TOWN_AREA_COLS - 1] = 1;
         }
       }
     }
@@ -363,14 +364,18 @@
     // Place a long shopfront along the back edge of the first plaza area.
     if (areaIndex === 0) {
       for (let y = 2; y <= 5; y++) {
-        for (let x = 8; x <= 24; x++) {
+        // Walk the storefront span while clamping the end to the shortened plaza width.
+        const storefrontEnd = Math.min(TOWN_AREA_COLS - 8, 24);
+        for (let x = 8; x <= storefrontEnd; x++) {
           // Leave a doorway gap so the front row still looks traversable.
           if (x >= 15 && x <= 17) continue;
           tiles[y][x] = 1;
         }
       }
       // Add a planter stripe to break up the center of the courtyard.
-      for (let x = 32; x <= 44; x++) {
+      const planterStart = Math.max(2, Math.floor(TOWN_AREA_COLS * 0.55));
+      const planterEnd = Math.min(TOWN_AREA_COLS - 4, planterStart + 6);
+      for (let x = planterStart; x <= planterEnd; x++) {
         tiles[9][x] = 1;
       }
     }
@@ -383,7 +388,10 @@
         }
       }
       for (let y = 8; y <= 12; y++) {
-        for (let x = 38; x <= 54; x++) {
+        // Position the rear warehouse near the right edge while respecting the reduced width.
+        const warehouseStart = Math.max(Math.floor(TOWN_AREA_COLS * 0.55), 18);
+        const warehouseEnd = Math.min(TOWN_AREA_COLS - 2, warehouseStart + 10);
+        for (let x = warehouseStart; x <= warehouseEnd; x++) {
           tiles[y][x] = 1;
         }
       }
@@ -1176,10 +1184,10 @@
   function townTileAtTileCoordinates(tileX, tileY) {
     // Treat vertical out-of-bounds as solid so Link cannot leave the plaza height.
     if (tileY < 0 || tileY >= WORLD_ROWS) return 1;
-    const areaIndex = Math.floor(tileX / AREA_COLS);
+    const areaIndex = Math.floor(tileX / TOWN_AREA_COLS);
     // Treat positions outside the fixed-length town as solid walls.
     if (areaIndex < 0 || areaIndex >= TOWN_AREA_COUNT) return 1;
-    const localTileX = tileX - areaIndex * AREA_COLS;
+    const localTileX = tileX - areaIndex * TOWN_AREA_COLS;
     const areaTiles = getTownAreaTiles(areaIndex);
     return areaTiles[tileY][localTileX];
   }
@@ -2084,16 +2092,16 @@
 
     const proposedX = player.x + scaledMoveX;
     const proposedZ = player.z + scaledMoveZ;
+    const proposedRight = proposedX + player.width;
 
     // Exit back to the overworld once Link walks beyond the outer edges of the active plaza strip.
-    const targetAreaIndex = Math.floor(proposedX / AREA_WIDTH);
     // Step out to the overworld when moving past the far left border.
-    if (targetAreaIndex < 0) {
+    if (proposedX < 0) {
       returnToOverworldFromTown('left');
       return true;
     }
     // Step out to the overworld when moving past the far right border.
-    if (targetAreaIndex >= TOWN_AREA_COUNT) {
+    if (proposedRight > TOWN_TOTAL_WIDTH) {
       returnToOverworldFromTown('right');
       return true;
     }
