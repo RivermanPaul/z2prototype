@@ -250,6 +250,7 @@
   // Game mode flags so we can swap between the side-view and overworld engines.
   const GAME_MODE_SIDE_SCROLL = 'side-scroll';
   const GAME_MODE_OVERWORLD = 'overworld';
+  const GAME_MODE_RAISED = 'raised';
   let gameMode = GAME_MODE_SIDE_SCROLL;
 
   // World / tile setup
@@ -259,11 +260,15 @@
   const AREA_SCREEN_COUNT = 2;
   const AREA_COLS = SCREEN_COLS * AREA_SCREEN_COUNT;
   const AREA_WIDTH = AREA_COLS * TILE_SIZE;
+  const TOWN_AREA_COUNT = 2;
+  const TOWN_TOTAL_WIDTH = TOWN_AREA_COUNT * AREA_WIDTH;
 
   // Cache of generated areas so we only build each layout once.
   const areaCache = new Map();
   // Cache enemy instances per area so we can preserve their state when revisiting rooms.
   const areaEntities = new Map();
+  // Track the generated raised-view town layouts so each area only builds once.
+  const townAreaCache = new Map();
 
   // Produce the tile grid for a given area index.
   function generateAreaTiles(areaIndex) {
@@ -311,6 +316,65 @@
       areaCache.set(areaIndex, generateAreaTiles(areaIndex));
     }
     return areaCache.get(areaIndex);
+  }
+
+  // Produce the tile grid for a given raised town area index.
+  function generateTownAreaTiles(areaIndex) {
+    const tiles = [];
+    // Build the base plaza layout row-by-row so the ground is mostly walkable.
+    for (let y = 0; y < WORLD_ROWS; y++) {
+      const row = [];
+      // Populate each column of the current row with walkable space by default.
+      for (let x = 0; x < AREA_COLS; x++) {
+        let value = 0;
+        const globalX = areaIndex * AREA_COLS + x;
+        // Keep the perimeter walls solid so players stay inside the town bounds.
+        if (y === 0 || y === WORLD_ROWS - 1 || globalX === 0 || globalX === TOWN_TOTAL_WIDTH - 1) {
+          value = 1;
+        }
+        row.push(value);
+      }
+      tiles.push(row);
+    }
+
+    // Place a long shopfront along the back edge of the first plaza area.
+    if (areaIndex === 0) {
+      for (let y = 2; y <= 5; y++) {
+        for (let x = 8; x <= 24; x++) {
+          // Leave a doorway gap so the front row still looks traversable.
+          if (x >= 15 && x <= 17) continue;
+          tiles[y][x] = 1;
+        }
+      }
+      // Add a planter stripe to break up the center of the courtyard.
+      for (let x = 32; x <= 44; x++) {
+        tiles[9][x] = 1;
+      }
+    }
+
+    // Stagger a pair of warehouses in the second area to form a gentle zig-zag path.
+    if (areaIndex === 1) {
+      for (let y = 3; y <= 7; y++) {
+        for (let x = 6; x <= 16; x++) {
+          tiles[y][x] = 1;
+        }
+      }
+      for (let y = 8; y <= 12; y++) {
+        for (let x = 38; x <= 54; x++) {
+          tiles[y][x] = 1;
+        }
+      }
+    }
+
+    return tiles;
+  }
+
+  // Return (and lazily build) the tile array for the requested raised town area index.
+  function getTownAreaTiles(areaIndex) {
+    if (!townAreaCache.has(areaIndex)) {
+      townAreaCache.set(areaIndex, generateTownAreaTiles(areaIndex));
+    }
+    return townAreaCache.get(areaIndex);
   }
 
   // Return the list of area indices that overlap the current camera view (with padding for nearby rooms).
@@ -465,6 +529,14 @@
     cameraX = Math.min(Math.max(target, minCam), maxCam);
   }
 
+  // Update the raised-view camera so it follows Link across the fixed-length town strip.
+  function updateTownCamera() {
+    const target = player.x + player.width / 2 - canvas.width / 2;
+    const minCam = 0;
+    const maxCam = Math.max(0, TOWN_TOTAL_WIDTH - canvas.width);
+    cameraX = Math.min(Math.max(target, minCam), maxCam);
+  }
+
   // Duration of the player's walking animation frames in ticks.
   const WALK_ANIM_FRAME_DURATION = 6;
   // Duration of the Octorok's idle animation frames in ticks.
@@ -531,7 +603,13 @@
     moveTo: { x: 0, y: 0 },
     moveTimer: 0,
     moveDuration: 8,
-    facing: 'left'
+    facing: 'left',
+    pendingTileInteraction: false
+  };
+
+  // Track contextual data for the raised-view town, including where to return on exit.
+  const townState = {
+    entryTile: { x: overworldLayout[0].length - 2, y: 6 }
   };
 
   // Reset Link's side-view pose when returning from the overworld.
@@ -545,6 +623,24 @@
     player.attackTimer = 0;
     player.blockedThisSwing = false;
     player.crouching = false;
+    player.height = player.standHeight;
+    cameraX = 0;
+    lastAttackPressed = false;
+    lastJumpPressed = false;
+  }
+
+  // Place Link at the front of the raised-view town while clearing any combat state.
+  function resetTownPlayerPosition() {
+    player.x = TILE_SIZE * 2;
+    player.y = (WORLD_ROWS - 4) * TILE_SIZE;
+    player.vx = 0;
+    player.vy = 0;
+    player.onGround = true;
+    player.attacking = false;
+    player.attackTimer = 0;
+    player.blockedThisSwing = false;
+    player.crouching = false;
+    player.height = player.standHeight;
     cameraX = 0;
     lastAttackPressed = false;
     lastJumpPressed = false;
@@ -558,12 +654,31 @@
     overworldState.moving = false;
     overworldState.moveTimer = 0;
     overworldState.facing = 'left';
+    overworldState.pendingTileInteraction = false;
   }
 
   // Return to the side-scrolling engine after walking back to the right edge of the overworld.
   function returnToSideScrollFromOverworld() {
     gameMode = GAME_MODE_SIDE_SCROLL;
     resetSideViewPlayerPosition();
+  }
+
+  // Enter the raised-view town scene and remember which overworld tile to return to.
+  function enterTownFromOverworld() {
+    gameMode = GAME_MODE_RAISED;
+    townState.entryTile = { x: overworldState.playerTileX, y: overworldState.playerTileY };
+    resetTownPlayerPosition();
+  }
+
+  // Return to the overworld from town by restoring the saved tile coordinates.
+  function returnToOverworldFromTown() {
+    gameMode = GAME_MODE_OVERWORLD;
+    overworldState.playerTileX = townState.entryTile.x;
+    overworldState.playerTileY = townState.entryTile.y;
+    overworldState.moving = false;
+    overworldState.moveTimer = 0;
+    overworldState.pendingTileInteraction = false;
+    overworldState.facing = 'left';
   }
 
   const rocks = [];
@@ -852,12 +967,24 @@
         overworldState.playerTileY = overworldState.moveTo.y;
         overworldState.moving = false;
         overworldState.moveTimer = 0;
+        overworldState.pendingTileInteraction = true;
         // Transition back to the side-view once the player walks off the right edge bridge.
         if (overworldState.playerTileX >= overworldState.width - 1 && overworldState.facing === 'right') {
           returnToSideScrollFromOverworld();
         }
       }
       return;
+    }
+
+    // Trigger tile interactions only once after finishing a step to avoid immediate re-entry loops.
+    if (overworldState.pendingTileInteraction) {
+      overworldState.pendingTileInteraction = false;
+      const landedTile = overworldTileAt(overworldState.playerTileX, overworldState.playerTileY);
+      // Enter the raised-view town whenever Link steps onto the white plaza tile.
+      if (landedTile === 'T') {
+        enterTownFromOverworld();
+        return;
+      }
     }
 
     // Build an ordered list of desired movement directions so only one tile move occurs per step.
@@ -962,6 +1089,25 @@
     }
   }
 
+  // Look up the tile index inside the raised-view town at the requested tile coordinate.
+  function townTileAtTileCoordinates(tileX, tileY) {
+    // Treat vertical out-of-bounds as solid so Link cannot leave the plaza height.
+    if (tileY < 0 || tileY >= WORLD_ROWS) return 1;
+    const areaIndex = Math.floor(tileX / AREA_COLS);
+    // Treat positions outside the fixed-length town as solid walls.
+    if (areaIndex < 0 || areaIndex >= TOWN_AREA_COUNT) return 1;
+    const localTileX = tileX - areaIndex * AREA_COLS;
+    const areaTiles = getTownAreaTiles(areaIndex);
+    return areaTiles[tileY][localTileX];
+  }
+
+  // Look up the tile index inside the raised-view town at the requested pixel coordinate.
+  function townTileAtPixel(x, y) {
+    const tx = Math.floor(x / TILE_SIZE);
+    const ty = Math.floor(y / TILE_SIZE);
+    return townTileAtTileCoordinates(tx, ty);
+  }
+
   // Look up the tile index that occupies the given tile coordinate across any area.
   function tileAtTileCoordinates(tileX, tileY) {
     if (tileY < 0 || tileY >= WORLD_ROWS) return 1;
@@ -1000,6 +1146,29 @@
     if (tileAtPixel(left, bottom - 1)) return true;
     // Abort when the bottom-right corner hits something solid.
     if (tileAtPixel(right - 1, bottom - 1)) return true;
+    return false;
+  }
+
+  // Determine whether a rectangle collides with any solid town tiles.
+  function townRectVsWorld(x, y, width, height) {
+    const left = x;
+    const right = x + width;
+    const top = y;
+    const bottom = y + height;
+    const midY = (top + bottom) / 2;
+
+    // Abort when the top-left corner hits something solid.
+    if (townTileAtPixel(left, top)) return true;
+    // Abort when the top-right corner hits something solid.
+    if (townTileAtPixel(right - 1, top)) return true;
+    // Abort when the mid-left sample hits something solid.
+    if (townTileAtPixel(left, midY)) return true;
+    // Abort when the mid-right sample hits something solid.
+    if (townTileAtPixel(right - 1, midY)) return true;
+    // Abort when the bottom-left corner hits something solid.
+    if (townTileAtPixel(left, bottom - 1)) return true;
+    // Abort when the bottom-right corner hits something solid.
+    if (townTileAtPixel(right - 1, bottom - 1)) return true;
     return false;
   }
 
@@ -1773,6 +1942,109 @@
 
   }
 
+  // Handle free movement inside the raised-view town where up/down map to depth instead of jumping.
+  function updateRaisedPlayer() {
+    const inputKeys = combinedInputKeys();
+
+    // Detect a fresh press of the attack button so holding it down does not chain multiple swings.
+    const attackJustPressed = inputKeys.j && !lastAttackPressed;
+
+    // Compute directional intent using both axes so Link can walk diagonally across the plaza.
+    let moveX = 0;
+    let moveY = 0;
+    // Honor leftward input by subtracting from the horizontal axis.
+    if (inputKeys.a) moveX -= 1;
+    // Honor rightward input by adding to the horizontal axis.
+    if (inputKeys.d) moveX += 1;
+    // Honor upward input by subtracting from the depth axis to walk away from the camera.
+    if (inputKeys.w) moveY -= 1;
+    // Honor downward input by adding to the depth axis to walk toward the camera.
+    if (inputKeys.s) moveY += 1;
+
+    // Normalize diagonal walks so pace remains consistent in every direction.
+    const magnitude = Math.hypot(moveX, moveY);
+    const moveScale = magnitude > 0 ? player.speed / magnitude : 0;
+    const scaledMoveX = moveX * moveScale;
+    const scaledMoveY = moveY * moveScale;
+
+    // Turn to face the most recent horizontal input while leaving vertical strafe unchanged.
+    if (moveX !== 0) {
+      player.facing = moveX > 0 ? 1 : -1;
+    }
+
+    // Keep combat state simple by disabling crouch and jump in the raised view.
+    player.crouching = false;
+    player.height = player.standHeight;
+    player.onGround = true;
+
+    const proposedX = player.x + scaledMoveX;
+    const proposedY = player.y + scaledMoveY;
+
+    // Exit back to the overworld once Link walks past the entrance edge of town.
+    if (proposedX < -TILE_SIZE / 2) {
+      returnToOverworldFromTown();
+      return true;
+    }
+
+    // Apply horizontal movement only when the path stays clear of buildings.
+    if (!townRectVsWorld(proposedX, player.y, player.width, player.height)) {
+      player.x = proposedX;
+    }
+    // Apply vertical movement only when the path stays clear of scenery.
+    if (!townRectVsWorld(player.x, proposedY, player.width, player.height)) {
+      player.y = proposedY;
+    }
+
+    // Attack (virtual J) - available for timing practice even without enemies.
+    if (attackJustPressed && !player.attacking && player.hitTimer === 0) {
+      player.attacking = true;
+      player.attackTimer = 0;
+      player.blockedThisSwing = false;
+    }
+
+    // Count through the attack animation frames when active.
+    if (player.attacking) {
+      player.attackTimer++;
+      // End the attack when the animation timer completes.
+      if (player.attackTimer >= player.attackDuration) {
+        player.attacking = false;
+        player.attackTimer = 0;
+        player.blockedThisSwing = false;
+      }
+    }
+
+    // Taper off hurt invulnerability each frame until it hits zero.
+    if (player.hitTimer > 0) {
+      player.hitTimer--;
+    }
+
+    // Determine whether Link is currently walking so the animation can advance.
+    const currentlyWalking =
+      (Math.abs(scaledMoveX) > 0.05 || Math.abs(scaledMoveY) > 0.05) &&
+      player.hitTimer === 0 &&
+      !player.attacking;
+    player.walking = currentlyWalking;
+    // Update the walking animation timer/frame whenever movement is happening.
+    if (currentlyWalking) {
+      player.walkAnimTimer++;
+      // Swap frames every few ticks to create a two-step cycle.
+      if (player.walkAnimTimer >= WALK_ANIM_FRAME_DURATION) {
+        player.walkAnimTimer = 0;
+        player.walkAnimFrame = (player.walkAnimFrame + 1) % 2;
+      }
+    } else {
+      // Reset the walk animation when standing still so it starts from frame 0.
+      player.walkAnimTimer = 0;
+      player.walkAnimFrame = 0;
+    }
+
+    // Remember whether the attack and jump inputs are held for the next frame so we can continue to detect edge presses.
+    lastAttackPressed = inputKeys.j;
+    lastJumpPressed = inputKeys.k;
+
+    return false;
+  }
+
   // Render the tile-based ground layout relative to the camera.
   function drawWorld() {
     const startTileX = Math.floor(cameraX / TILE_SIZE);
@@ -1786,6 +2058,26 @@
           ctx.fillStyle = '#303060';
           ctx.fillRect(drawX, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
           ctx.fillStyle = '#505090';
+          ctx.fillRect(drawX, y * TILE_SIZE, TILE_SIZE, 4);
+        }
+      }
+    }
+  }
+
+  // Render the raised-view town tiles relative to the current camera offset.
+  function drawTownWorld() {
+    const startTileX = Math.floor(cameraX / TILE_SIZE);
+    const endTileX = Math.floor((cameraX + canvas.width) / TILE_SIZE) + 1;
+    // Walk each row in the plaza so we can render any visible scenery tiles.
+    for (let y = 0; y < WORLD_ROWS; y++) {
+      // Inspect every column that overlaps the current viewport.
+      for (let tileX = startTileX; tileX <= endTileX; tileX++) {
+        // Render only the solid scenery tiles while skipping open floor.
+        if (townTileAtTileCoordinates(tileX, y) === 1) {
+          const drawX = tileX * TILE_SIZE - cameraX;
+          ctx.fillStyle = '#2e2e52';
+          ctx.fillRect(drawX, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          ctx.fillStyle = '#5a628a';
           ctx.fillRect(drawX, y * TILE_SIZE, TILE_SIZE, 4);
         }
       }
@@ -2060,17 +2352,34 @@
     }
   }
 
+  // Run one frame of the raised-view town engine that reuses Link's combat controls but with depth movement.
+  function runRaisedTownFrame() {
+    const exitedTown = updateRaisedPlayer();
+    // Stop rendering the town when the player just walked back to the overworld.
+    if (exitedTown) return;
+
+    updateTownCamera();
+
+    ctx.fillStyle = '#1b1b34';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    drawTownWorld();
+    drawPlayer();
+  }
+
   // Main game loop that advances simulation and rendering frames.
   function loop() {
     // Branch between the two engines depending on whether Link is in side-view or overworld mode.
     if (gameMode === GAME_MODE_SIDE_SCROLL) {
       runSideScrollFrame();
-    } else {
+    } else if (gameMode === GAME_MODE_OVERWORLD) {
       updateOverworld();
       // Only render the overworld scene when we remain inside that mode after processing movement.
       if (gameMode === GAME_MODE_OVERWORLD) {
         drawOverworld();
       }
+    } else {
+      runRaisedTownFrame();
     }
     requestAnimationFrame(loop);
   }
