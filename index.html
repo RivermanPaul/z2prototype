@@ -2093,22 +2093,36 @@
     const proposedX = player.x + scaledMoveX;
     const proposedZ = player.z + scaledMoveZ;
     const proposedRight = proposedX + player.width;
+    // Track the intended horizontal position so we can reroute exits without losing the original intent.
+    let adjustedX = proposedX;
+    // Identify which half of town Link currently occupies so we can route exits correctly.
+    const currentTownArea = Math.floor(player.x / TOWN_AREA_WIDTH);
+    const currentAreaStart = currentTownArea * TOWN_AREA_WIDTH;
+    const currentAreaEnd = currentAreaStart + TOWN_AREA_WIDTH;
 
     // Exit back to the overworld once Link walks beyond the outer edges of the active plaza strip.
     // Step out to the overworld when moving past the far left border.
-    if (proposedX < 0) {
+    if (adjustedX < 0) {
       returnToOverworldFromTown('left');
       return true;
     }
+    // Step into the left plaza when walking out of the right plaza's left exit.
+    if (adjustedX < currentAreaStart && currentTownArea > 0) {
+      adjustedX = currentAreaStart - player.width;
+    }
+    // Step into the right plaza when walking out of the left plaza's right exit.
+    if (adjustedX + player.width > currentAreaEnd && currentTownArea < TOWN_AREA_COUNT - 1) {
+      adjustedX = currentAreaEnd;
+    }
     // Step out to the overworld when moving past the far right border.
-    if (proposedRight > TOWN_TOTAL_WIDTH) {
+    if (adjustedX + player.width > TOWN_TOTAL_WIDTH) {
       returnToOverworldFromTown('right');
       return true;
     }
 
     // Apply horizontal movement only when the path stays clear of buildings.
-    if (!townRectVsWorld(proposedX, player.z, player.width, player.height)) {
-      player.x = proposedX;
+    if (!townRectVsWorld(adjustedX, player.z, player.width, player.height)) {
+      player.x = adjustedX;
     }
     // Apply depth movement only when the path stays clear of scenery and the player is grounded.
     if (!townRectVsWorld(player.x, proposedZ, player.width, player.height)) {
