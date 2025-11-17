@@ -113,6 +113,8 @@ function enterTownFromOverworld() {
   const distanceToLeft = nearestLeft ? Math.abs(nearestLeft.x - townState.entryTile.x) : Infinity;
   const distanceToRight = nearestRight ? Math.abs(nearestRight.x - townState.entryTile.x) : Infinity;
   townState.entrySide = distanceToRight < distanceToLeft ? 'right' : 'left';
+  // Rebuild the town patrol roster so each visit starts fresh.
+  resetTownEnemies();
   resetTownPlayerPosition();
 }
 
