@@ -17,6 +17,7 @@ function createTownSpearmanAt(x, z, facing = 1) {
     // Optional depth drift when steering around walls.
     vz: 0.8,
     verticalDir: Math.random() < 0.5 ? -1 : 1,
+    swapVerticalNext: Math.random() < 0.5,
     movingVertically: false,
     facing,
     state: 'patrol',
@@ -78,7 +79,14 @@ function updateTownSpearman(spearman) {
 
     // Flip directions when colliding with scenery above/below so the spearman bounces along the obstacle.
     if (verticalBlocked) {
-      spearman.verticalDir *= -1;
+      if (spearman.swapVerticalNext) {
+        spearman.verticalDir *= -1;
+      } else {
+        spearman.facing *= -1;
+        spearman.vx *= -1;
+        spearman.movingVertically = false;
+      }
+      spearman.swapVerticalNext = !spearman.swapVerticalNext;
     } else {
       // Apply the slide along the current vertical direction.
       spearman.z = proposedZ;
@@ -112,11 +120,14 @@ function handleTownSpearmanVsPlayer(spearman) {
     width: spearman.width,
     height: spearman.height
   };
+  const playerCenter = player.x + player.width / 2;
+  const spearmanCenter = spearman.x + spearman.width / 2;
 
   // One clean sword hit defeats the spearman instantly.
   if (sword && rectsOverlap(sword, spearmanBox)) {
     spearman.state = 'defeated';
-    spearman.vx = -player.facing * 3.2;
+    const awayFromPlayer = Math.sign(spearmanCenter - playerCenter) || 1;
+    spearman.vx = awayFromPlayer * 3.2;
     spearman.vy = -5;
     return;
   }
@@ -132,9 +143,7 @@ function handleTownSpearmanVsPlayer(spearman) {
     // Trigger hurt state when the spearman's body overlaps Link.
     if (rectsOverlap(playerBox, spearmanBox)) {
       player.hitTimer = 24;
-      const playerCenter = player.x + player.width / 2;
-      const enemyCenter = spearman.x + spearman.width / 2;
-      const dir = playerCenter < enemyCenter ? -1 : 1;
+      const dir = playerCenter < spearmanCenter ? -1 : 1;
       player.vx = dir * 3.0;
       player.vy = -4;
       player.attacking = false;
