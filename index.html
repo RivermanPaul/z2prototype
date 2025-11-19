@@ -293,6 +293,8 @@
   const areaEntities = new Map();
   // Cache of town enemies so each plaza section preserves its spearmen between visits.
   const townEnemies = new Map();
+  // Cache of town NPCs so they retain their patrol positions until Link restarts.
+  const townTownsfolk = new Map();
   // Track the generated raised-view town layouts so each area only builds once.
   const townAreaCache = new Map();
   // Track generated shop interior layouts so each plaza can host its own simple storefront room.
@@ -598,6 +600,18 @@
     ];
   }
 
+  // Create the spawn layout for the harmless townsfolk that wander each plaza.
+  function townTownsfolkSpawns(areaIndex) {
+    const facing = areaIndex === 0 ? 1 : -1;
+    const plazaDepth = TOWN_GROUND_Z - TILE_SIZE * 0.75;
+    const walkwayDepth = TOWN_GROUND_Z - TILE_SIZE * 2.0;
+    const thirdWidth = TOWN_AREA_WIDTH / 3;
+    return [
+      { x: thirdWidth - TILE_SIZE * 0.5, z: plazaDepth, facing },
+      { x: thirdWidth * 2 + TILE_SIZE * 0.25, z: walkwayDepth, facing }
+    ];
+  }
+
   // Build the roster of spearmen that belong to the requested town area.
   function createTownSpearmenForArea(areaIndex) {
     const spawns = townSpearmanSpawns(areaIndex);
@@ -609,6 +623,23 @@
     return enemies;
   }
 
+  // Build the roster of townsfolk that belong to the requested town area.
+  function createTownTownsfolkForArea(areaIndex) {
+    const spawns = townTownsfolkSpawns(areaIndex);
+    const walkers = [];
+    for (const spawn of spawns) {
+      walkers.push(createTownSpearmanAt(spawn.x, spawn.z, spawn.facing, {
+        speedScale: 0.5,
+        dropCoin: false,
+        harmless: true,
+        hasSpear: false,
+        palette: { body: '#d6b26a' },
+        type: 'townsperson'
+      }));
+    }
+    return walkers;
+  }
+
   // Retrieve (and lazily build) the spearmen assigned to a given town area.
   function getTownSpearmen(areaIndex) {
     if (!townEnemies.has(areaIndex)) {
@@ -617,9 +648,22 @@
     return townEnemies.get(areaIndex);
   }
 
+  // Retrieve (and lazily build) the townsfolk assigned to a given town area.
+  function getTownTownsfolk(areaIndex) {
+    if (!townTownsfolk.has(areaIndex)) {
+      townTownsfolk.set(areaIndex, createTownTownsfolkForArea(areaIndex));
+    }
+    return townTownsfolk.get(areaIndex);
+  }
+
   // Clear town enemies so the patrol roster resets whenever Link re-enters the plaza.
   function resetTownEnemies() {
     townEnemies.clear();
+  }
+
+  // Clear townsfolk so a restart respawns them at their patrol routes.
+  function resetTownTownsfolk() {
+    townTownsfolk.clear();
   }
 
   // Track the current horizontal scroll position of the camera.
@@ -651,6 +695,8 @@
   // Duration of the Octorok's idle animation frames in ticks.
   const OCTOROK_IDLE_FRAME_DURATION = 24;
 
+  const PLAYER_MAX_HP = 5;
+
   // Player properties: 2 tiles tall, 1 tile wide
   const player = {
     x: 4 * TILE_SIZE,
@@ -679,6 +725,7 @@
     walking: false,
     walkAnimTimer: 0,
     walkAnimFrame: 0,
+    hp: PLAYER_MAX_HP,
     get attackDuration() {
       return this.attackWindup + this.attackStab + this.attackRecover;
     }
@@ -758,6 +805,11 @@
     enemyType: null,
     octoroks: [],
     knights: []
+  };
+
+  const gameOverState = {
+    active: false,
+    inputLatched: false
   };
 
   // Spawn a bouncing coin at the defeated enemy's position so Link can collect it.
@@ -988,6 +1040,72 @@
   let lastAttackPressed = false;
   // Track whether the jump input was pressed on the previous frame so we only trigger a jump on the edge.
   let lastJumpPressed = false;
+
+  function resetPlayerVitals() {
+    player.hp = PLAYER_MAX_HP;
+    player.hitTimer = 0;
+  }
+
+  function applyPlayerDamage(amount = 1) {
+    if (gameOverState.active || player.hp <= 0) return;
+    player.hp = Math.max(0, player.hp - amount);
+    if (player.hp === 0) {
+      triggerGameOver();
+    }
+  }
+
+  function isAnyInputPressed() {
+    const pad = readGamepadActions();
+    const padActive = !!(pad && (pad.left || pad.right || pad.down || pad.jump || pad.attack));
+    const keyActive = Object.values(keys).some(Boolean);
+    const pointerActive = activePointers.size > 0;
+    return padActive || keyActive || pointerActive;
+  }
+
+  function triggerGameOver() {
+    player.vx = 0;
+    player.vy = 0;
+    player.attacking = false;
+    player.attackTimer = 0;
+    gameOverState.active = true;
+    gameOverState.inputLatched = isAnyInputPressed();
+  }
+
+  function restartGame() {
+    resetPlayerVitals();
+    coins.length = 0;
+    rocks.length = 0;
+    particles.length = 0;
+    townParticles.length = 0;
+    townPenaltyMarks.length = 0;
+    areaEntities.clear();
+    resetTownEnemies();
+    resetTownTownsfolk();
+    randomBattleState.active = false;
+    randomBattleState.areaStartX = 0;
+    randomBattleState.enemyType = null;
+    randomBattleState.returnTile = { x: 0, y: 0 };
+    randomBattleState.octoroks = [];
+    randomBattleState.knights = [];
+    randomBattleState.areaIndex = 3000;
+    initOverworld(TILE_SIZE);
+    townState.entryTile = { x: 17, y: 6 };
+    townState.entrySide = 'left';
+    townState.areaIndex = 0;
+    townState.inShop = false;
+    townState.shopIndex = 0;
+    gameMode = GAME_MODE_SIDE_SCROLL;
+    resetSideViewPlayerPosition();
+    lastAttackPressed = false;
+    lastJumpPressed = false;
+    Object.keys(keys).forEach((k) => {
+      keys[k] = false;
+    });
+    releasePointerFromButtons();
+    cameraX = 0;
+    gameOverState.active = false;
+    gameOverState.inputLatched = false;
+  }
 
   // Release buttons that still track a pointer id or clear a specific button entirely.
   function releasePointerFromButtons(pointerId, specificButton) {
@@ -2077,6 +2195,38 @@
     }
   }
 
+  function drawHud() {
+    ctx.save();
+    ctx.translate(10, 10);
+    const heartSize = 12;
+    for (let i = 0; i < PLAYER_MAX_HP; i++) {
+      const x = i * (heartSize + 4);
+      const filled = i < player.hp;
+      ctx.fillStyle = filled ? '#ff4d6d' : '#2f2c45';
+      ctx.strokeStyle = '#0f0c16';
+      ctx.lineWidth = 1;
+      ctx.fillRect(x, 0, heartSize, heartSize);
+      ctx.strokeRect(x + 0.5, 0.5, heartSize - 1, heartSize - 1);
+    }
+    ctx.restore();
+  }
+
+  function drawGameOverScreen() {
+    ctx.fillStyle = '#0d0d1a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '24px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 10);
+    ctx.font = '16px sans-serif';
+    ctx.fillText('Press any button to restart', canvas.width / 2, canvas.height / 2 + 16);
+    ctx.restore();
+
+    drawHud();
+  }
+
   // Run one frame of the side-scrolling engine, including physics, AI, and rendering.
   function runSideScrollFrame() {
     updatePlayer();
@@ -2165,12 +2315,15 @@
       ctx.fillStyle = 'rgba(255, 220, 160, 0.8)';
       ctx.fillRect(Math.floor(p.x - cameraX), Math.floor(p.y), 2, 2);
     }
+
+    drawHud();
   }
 
   // Run one frame of the raised-view town engine that reuses Link's combat controls but with depth movement.
   function runRaisedTownFrame() {
     // Pull the active spearmen roster for the current plaza unless Link is inside a shop interior.
     const activeSpearmen = townState.inShop ? [] : getTownSpearmen(townState.areaIndex);
+    const activeTownsfolk = townState.inShop ? [] : getTownTownsfolk(townState.areaIndex);
     const exitedTown = updateRaisedPlayer();
     // Stop rendering the town when the player just walked back to the overworld.
     if (exitedTown) return;
@@ -2183,15 +2336,25 @@
         updateTownSpearman(spearman);
         handleTownSpearmanVsPlayer(spearman);
       }
+      for (const townsfolk of activeTownsfolk) {
+        updateTownSpearman(townsfolk);
+        handleTownSpearmanVsPlayer(townsfolk);
+      }
       // Remove defeated spearmen once their poof finishes playing.
       for (let i = activeSpearmen.length - 1; i >= 0; i--) {
         if (activeSpearmen[i].state === 'vanished') {
           activeSpearmen.splice(i, 1);
         }
       }
+      for (let i = activeTownsfolk.length - 1; i >= 0; i--) {
+        if (activeTownsfolk[i].state === 'vanished') {
+          activeTownsfolk.splice(i, 1);
+        }
+      }
     }
 
     updateTownParticles();
+    updateTownPenaltyMarks();
     updateCoins(GAME_MODE_RAISED);
 
     ctx.fillStyle = '#1b1b34';
@@ -2203,14 +2366,33 @@
       for (const spearman of activeSpearmen) {
         drawTownSpearman(spearman);
       }
+      for (const townsfolk of activeTownsfolk) {
+        drawTownSpearman(townsfolk);
+      }
     }
     drawCoins(GAME_MODE_RAISED);
+    drawTownPenaltyMarks();
     drawTownParticles();
     drawPlayer();
+    drawHud();
   }
 
   // Main game loop that advances simulation and rendering frames.
   function loop() {
+    if (gameOverState.active) {
+      if (gameOverState.inputLatched) {
+        if (!isAnyInputPressed()) {
+          gameOverState.inputLatched = false;
+        }
+      } else if (isAnyInputPressed()) {
+        restartGame();
+      }
+
+      drawGameOverScreen();
+      requestAnimationFrame(loop);
+      return;
+    }
+
     // Branch between the two engines depending on whether Link is in side-view or overworld mode.
     if (gameMode === GAME_MODE_SIDE_SCROLL) {
       runSideScrollFrame();
