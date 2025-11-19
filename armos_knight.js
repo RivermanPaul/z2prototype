@@ -7,7 +7,9 @@ function createArmosKnightAt(x, y) {
     y,
     width: TILE_SIZE,
     height: TILE_SIZE * 2,
+    groundY: y,
     vx: 0,
+    vy: 0,
     facing: -1,
     attacking: false,
     attackTimer: 0,
@@ -20,6 +22,11 @@ function createArmosKnightAt(x, y) {
     shieldHigh: true,
     shieldChangeTimer: 0,
     knockbackTimer: 0,
+    gravity: 0.35,
+    // Health pool so Link needs several clean hits to win the duel.
+    hp: 6,
+    lifeState: 'alive',
+    deathTimer: 0,
     // Track whether the current sword swing already bounced off Link's shield.
     blockedThisSwing: false,
     // Distance control helpers so the knight can shuffle around Link.
@@ -41,8 +48,52 @@ function createArmosKnightAt(x, y) {
   };
 }
 
+// Trigger the Armos Knight's death animation so he pops upward and fades out.
+function startArmosKnightDeath(knight, knockDir = 0) {
+  knight.lifeState = 'dying';
+  knight.deathTimer = 36;
+  knight.attacking = false;
+  knight.attackTimer = 0;
+  knight.attackCooldown = 9999;
+  knight.hitTimer = 0;
+  knight.knockbackTimer = 0;
+  knight.walking = false;
+  knight.walkAnimTimer = 0;
+  knight.walkAnimFrame = 0;
+  knight.blockedThisSwing = false;
+  const launchDir = knockDir !== 0 ? knockDir : knight.facing;
+  knight.vx = launchDir * 2.4;
+  knight.vy = -5.5;
+}
+
 // Advance the Armos Knight's idle, shield, and attack timers.
 function updateArmosKnight(knight) {
+  // Skip any processing once the knight already faded away.
+  if (knight.lifeState === 'dead') return;
+
+  // Play the short defeat arc and let the poof timer tick down.
+  if (knight.lifeState === 'dying') {
+    knight.vy += knight.gravity;
+    knight.x += knight.vx;
+    knight.y += knight.vy;
+    knight.vx *= 0.92;
+
+    // Stop falling once he returns to the ground plane.
+    if (knight.y >= knight.groundY) {
+      knight.y = knight.groundY;
+      knight.vy = 0;
+    }
+
+    if (knight.deathTimer > 0) {
+      knight.deathTimer--;
+    }
+    if (knight.deathTimer === 0) {
+      spawnEnemyPoof(knight.x + knight.width / 2, knight.y + knight.height / 2);
+      knight.lifeState = 'dead';
+    }
+    return;
+  }
+
   const playerCenter = player.x + player.width / 2;
   const knightCenter = knight.x + knight.width / 2;
   // Face toward Link so the shield and sword always orient correctly.
@@ -226,6 +277,9 @@ function knightSwordHitbox(knight) {
 
 // Evaluate collisions between Link and the Armos Knight, including sword clashes and body bumps.
 function handleArmosKnightVsPlayer(knight) {
+  // Skip further collision checks once the knight is defeated.
+  if (knight.lifeState !== 'alive') return;
+
   const sword = swordHitbox();
   const knightShield = knightShieldHitbox(knight);
   const playerBox = {
@@ -239,6 +293,12 @@ function handleArmosKnightVsPlayer(knight) {
     const swordBlocked = rectsOverlap(sword, knightShield);
     // Only register damage if the blade sneaks around the shield and touches the body.
     if (!swordBlocked && rectsOverlap(sword, knight)) {
+      knight.hp--;
+      // Launch a death animation once health reaches zero.
+      if (knight.hp <= 0) {
+        startArmosKnightDeath(knight, player.facing);
+        return;
+      }
       knight.hitTimer = 14;
       const knockDir = player.facing;
       knight.vx = knockDir * 2.5;
@@ -313,10 +373,21 @@ function handleArmosKnightVsPlayer(knight) {
 
 // Render the Armos Knight along with its shield and sword indicators.
 function drawArmosKnight(knight) {
+  // Do not draw the knight after the poof ends.
+  if (knight.lifeState === 'dead') return;
+
   const renderX = Math.floor(knight.x - cameraX);
   const renderY = Math.floor(knight.y);
   const w = knight.width;
   const h = knight.height;
+  const fading = knight.lifeState === 'dying';
+
+  // Fade the sprite out as the death animation wraps up.
+  if (fading) {
+    const fade = Math.max(0, knight.deathTimer) / 36;
+    ctx.save();
+    ctx.globalAlpha = 0.25 + fade * 0.75;
+  }
 
   // Flash white while in hitstun to provide quick feedback.
   if (knight.hitTimer > 0 && (knight.hitTimer % 4 < 2)) {
@@ -345,30 +416,36 @@ function drawArmosKnight(knight) {
   ctx.fillStyle = '#d89060';
   ctx.fillRect(renderX, renderY, w, Math.floor(TILE_SIZE / 2));
 
-  const shield = knightShieldHitbox(knight);
-  ctx.fillStyle = '#c4c8d8';
-  ctx.fillRect(Math.floor(shield.x - cameraX), Math.floor(shield.y), shield.width, shield.height);
-  ctx.fillStyle = '#8a8fa8';
-  ctx.fillRect(Math.floor(shield.x - cameraX) + 1, Math.floor(shield.y) + 2, shield.width - 2, shield.height - 4);
+  if (!fading) {
+    const shield = knightShieldHitbox(knight);
+    ctx.fillStyle = '#c4c8d8';
+    ctx.fillRect(Math.floor(shield.x - cameraX), Math.floor(shield.y), shield.width, shield.height);
+    ctx.fillStyle = '#8a8fa8';
+    ctx.fillRect(Math.floor(shield.x - cameraX) + 1, Math.floor(shield.y) + 2, shield.width - 2, shield.height - 4);
 
-  const swordPose = knightSwordPose(knight);
-  // Only draw the sword when the animation is active.
-  if (swordPose) {
-    const { rect, phase } = swordPose;
-    const swordScreenX = Math.floor(rect.x - cameraX);
-    const swordScreenY = Math.floor(rect.y);
-    ctx.fillStyle = phase === 'windup' ? '#ffd480' : '#f0f0f0';
-    ctx.fillRect(swordScreenX, swordScreenY, rect.width, rect.height);
-    // Add a subtle glow during the windup so players can spot the upcoming strike.
-    if (phase === 'windup') {
-      ctx.fillStyle = 'rgba(255, 215, 130, 0.35)';
-      ctx.fillRect(swordScreenX - 1, swordScreenY - 1, rect.width + 2, rect.height + 2);
+    const swordPose = knightSwordPose(knight);
+    // Only draw the sword when the animation is active.
+    if (swordPose) {
+      const { rect, phase } = swordPose;
+      const swordScreenX = Math.floor(rect.x - cameraX);
+      const swordScreenY = Math.floor(rect.y);
+      ctx.fillStyle = phase === 'windup' ? '#ffd480' : '#f0f0f0';
+      ctx.fillRect(swordScreenX, swordScreenY, rect.width, rect.height);
+      // Add a subtle glow during the windup so players can spot the upcoming strike.
+      if (phase === 'windup') {
+        ctx.fillStyle = 'rgba(255, 215, 130, 0.35)';
+        ctx.fillRect(swordScreenX - 1, swordScreenY - 1, rect.width + 2, rect.height + 2);
+      }
+      ctx.fillStyle = '#c8a060';
+      const hiltX = knight.facing > 0
+        ? Math.floor(knight.x + knight.width - cameraX)
+        : Math.floor(knight.x - 6 - cameraX);
+      ctx.fillRect(hiltX, swordScreenY - 2, 6, 2);
     }
-    ctx.fillStyle = '#c8a060';
-    const hiltX = knight.facing > 0
-      ? Math.floor(knight.x + knight.width - cameraX)
-      : Math.floor(knight.x - 6 - cameraX);
-    ctx.fillRect(hiltX, swordScreenY - 2, 6, 2);
+  }
+
+  if (fading) {
+    ctx.restore();
   }
 }
 
