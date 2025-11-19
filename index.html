@@ -867,7 +867,7 @@
     rocks.length = 0;
     particles.length = 0;
 
-    const spawnOffsets = [canvas.width * 0.5, canvas.width * 0.85];
+    const spawnOffsets = [canvas.width * 0.65];
     const clampSpawnX = (x, width) => {
       const minX = randomBattleState.areaStartX + TILE_SIZE;
       const maxX = randomBattleState.areaStartX + AREA_WIDTH - width - TILE_SIZE;
@@ -881,10 +881,10 @@
     };
 
     if (enemyType === 'blob') {
-      // Spawn pairs of octoroks mirrored on both sides of Link.
+      // Spawn octoroks mirrored on both sides of Link.
       const octorokGround = (WORLD_ROWS - 2) * TILE_SIZE - TILE_SIZE;
       for (const offset of spawnOffsets) {
-        // March the octorok pairs outward using the configured offsets.
+        // March the octorok pair outward using the configured offset.
         const left = createOctorokAt(clampSpawnX(centerX - offset, TILE_SIZE), octorokGround);
         left.onGround = true;
         faceTowardsPlayer(left);
