@@ -1037,7 +1037,8 @@
   function shopHeartBox() {
     const heartSize = TILE_SIZE;
     const heartX = SHOP_WIDTH / 2 - heartSize / 2;
-    const heartY = TOWN_GROUND_Z - heartSize * 0.5;
+    // Lift the heart display into the middle of the shop so it sits away from the doorway.
+    const heartY = TOWN_GROUND_Z - heartSize * 5;
     return { x: heartX, y: heartY, width: heartSize, height: heartSize * 1.2 };
   }
 
