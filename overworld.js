@@ -43,7 +43,8 @@ function initOverworld(tileSize) {
     pendingTileInteraction: false,
     enemies: [],
     enemyCollisionFlag: false,
-    enemyCollisionCooldown: 0
+    enemyCollisionCooldown: 0,
+    lastEnemyCollisionTile: null
   };
 
   // Seed a handful of simple overworld foes so the map feels alive.
@@ -303,9 +304,46 @@ function checkOverworldEnemyCollisions() {
       // Keep the enemy alive but mark that a collision occurred so the combat encounter can hook in later.
       overworldState.enemyCollisionFlag = true;
       overworldState.lastEnemyCollision = enemy.type;
+      overworldState.lastEnemyCollisionTile = { x: playerTileX, y: playerTileY };
       overworldState.enemyCollisionCooldown = 18;
       break;
     }
+  }
+}
+
+// Shuffle enemy positions across random walkable tiles so encounters feel fresh after a battle.
+function randomizeOverworldEnemyPositions() {
+  const walkable = [];
+  // Scan every tile to collect the walkable coordinates that can host enemies.
+  for (let y = 0; y < overworldState.height; y++) {
+    for (let x = 0; x < overworldState.width; x++) {
+      if (overworldTileWalkable(overworldTileAt(x, y))) {
+        walkable.push({ x, y });
+      }
+    }
+  }
+
+  // Avoid respawning enemies directly on top of Link's tile.
+  const playerTile = {
+    x: overworldState.moving ? overworldState.moveTo.x : overworldState.playerTileX,
+    y: overworldState.moving ? overworldState.moveTo.y : overworldState.playerTileY
+  };
+
+  const available = walkable.filter((t) => !(t.x === playerTile.x && t.y === playerTile.y));
+
+  for (const enemy of overworldState.enemies) {
+    // Stop early if there are no safe tiles left to place a foe.
+    if (available.length === 0) break;
+    const choiceIndex = Math.floor(Math.random() * available.length);
+    const spot = available.splice(choiceIndex, 1)[0];
+    enemy.tileX = spot.x;
+    enemy.tileY = spot.y;
+    enemy.moveFrom = { x: spot.x, y: spot.y };
+    enemy.moveTo = { x: spot.x, y: spot.y };
+    enemy.moving = false;
+    enemy.pauseTimer = 12;
+    enemy.chasing = false;
+    enemy.chaseTilesRemaining = 0;
   }
 }
 
@@ -374,6 +412,12 @@ function updateOverworld() {
   }
 
   checkOverworldEnemyCollisions();
+
+  // Immediately launch a random battle when Link touches an overworld foe.
+  if (overworldState.enemyCollisionFlag) {
+    overworldState.enemyCollisionFlag = false;
+    startRandomBattle(overworldState.lastEnemyCollision, overworldState.lastEnemyCollisionTile);
+  }
 }
 
 // Render the overworld top-down map using simple color-coded tiles.

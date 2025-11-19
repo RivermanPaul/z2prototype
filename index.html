@@ -747,11 +747,23 @@
   const particles = [];
   const coins = [];
 
+  // Track whether Link is inside a special two-screen combat encounter triggered from the overworld.
+  const randomBattleState = {
+    active: false,
+    areaIndex: 3000,
+    areaStartX: 0,
+    returnTile: { x: 0, y: 0 },
+    enemyType: null,
+    octoroks: [],
+    knights: []
+  };
+
   // Spawn a bouncing coin at the defeated enemy's position so Link can collect it.
   function spawnCoinFromEnemy(x, y, width, height, mode, groundZ = null) {
     const size = Math.floor(TILE_SIZE * 0.7);
     const spawnX = x + width / 2 - size / 2;
     const spawnY = y + height / 2 - size / 2;
+    const bounceSpeed = 7;
     coins.push({
       x: spawnX,
       y: spawnY,
@@ -759,13 +771,100 @@
       width: size,
       height: size,
       vx: 0,
-      vy: -7,
+      vy: -bounceSpeed,
+      bounceSpeed,
       gravity: 0.35,
       maxFall: 8,
       bouncesRemaining: 4,
       mode,
       collected: false
     });
+  }
+
+  // Build a fresh encounter when Link collides with an overworld foe.
+  function startRandomBattle(enemyType, collisionTile = null) {
+    randomBattleState.active = true;
+    randomBattleState.enemyType = enemyType;
+    randomBattleState.returnTile = collisionTile || { x: overworldState.playerTileX, y: overworldState.playerTileY };
+    randomBattleState.octoroks = [];
+    randomBattleState.knights = [];
+    randomBattleState.areaStartX = randomBattleState.areaIndex * AREA_WIDTH;
+
+    // Reuse the base area layout so the battle arena spans two screens with flat ground and a single platform set.
+    if (!areaCache.has(randomBattleState.areaIndex)) {
+      areaCache.set(randomBattleState.areaIndex, generateAreaTiles(0));
+    }
+
+    // Drop Link into the center of the arena.
+    const centerX = randomBattleState.areaStartX + AREA_WIDTH / 2 - player.width / 2;
+    const groundY = (WORLD_ROWS - 4) * TILE_SIZE;
+    player.x = centerX;
+    player.y = groundY;
+    player.z = groundY;
+    player.vx = 0;
+    player.vy = 0;
+    player.onGround = true;
+    player.attacking = false;
+    player.attackTimer = 0;
+    player.blockedThisSwing = false;
+    player.crouching = false;
+    player.height = player.standHeight;
+    player.hitTimer = 0;
+    rocks.length = 0;
+    particles.length = 0;
+
+    const spawnOffsets = [canvas.width * 0.5, canvas.width * 0.85];
+    const clampSpawnX = (x, width) => {
+      const minX = randomBattleState.areaStartX + TILE_SIZE;
+      const maxX = randomBattleState.areaStartX + AREA_WIDTH - width - TILE_SIZE;
+      return Math.max(minX, Math.min(maxX, x));
+    };
+
+    if (enemyType === 'blob') {
+      // Spawn pairs of octoroks mirrored on both sides of Link.
+      const octorokGround = (WORLD_ROWS - 2) * TILE_SIZE - TILE_SIZE;
+      for (const offset of spawnOffsets) {
+        // March the octorok pairs outward using the configured offsets.
+        const left = createOctorokAt(clampSpawnX(centerX - offset, TILE_SIZE), octorokGround);
+        left.onGround = true;
+        const right = createOctorokAt(clampSpawnX(centerX + offset, TILE_SIZE), octorokGround);
+        right.onGround = true;
+        randomBattleState.octoroks.push(left, right);
+      }
+    } else {
+      // Otherwise, drop in Armos Knights when colliding with a beast on the overworld.
+      const knightGround = (WORLD_ROWS - 2) * TILE_SIZE - TILE_SIZE * 2;
+      for (const offset of spawnOffsets) {
+        // Mirror knights on both sides so Link is flanked at matching distances.
+        const left = createArmosKnightAt(clampSpawnX(centerX - offset, TILE_SIZE), knightGround);
+        left.groundY = knightGround;
+        const right = createArmosKnightAt(clampSpawnX(centerX + offset, TILE_SIZE), knightGround);
+        right.groundY = knightGround;
+        randomBattleState.knights.push(left, right);
+      }
+    }
+
+    gameMode = GAME_MODE_SIDE_SCROLL;
+    updateCamera();
+  }
+
+  // Return to the overworld after escaping the encounter boundaries and reshuffle enemy positions.
+  function endRandomBattleAndReturn() {
+    randomBattleState.active = false;
+    randomBattleState.octoroks = [];
+    randomBattleState.knights = [];
+    randomBattleState.enemyType = null;
+    rocks.length = 0;
+    particles.length = 0;
+    randomizeOverworldEnemyPositions();
+
+    overworldState.playerTileX = randomBattleState.returnTile.x;
+    overworldState.playerTileY = randomBattleState.returnTile.y;
+    overworldState.moving = false;
+    overworldState.moveTimer = 0;
+    overworldState.pendingTileInteraction = false;
+    overworldState.enemyCollisionCooldown = 20;
+    gameMode = GAME_MODE_OVERWORLD;
   }
 
   // Advance active coins so they bounce off the scenery and wait for Link to grab them.
@@ -800,12 +899,9 @@
               coin.y -= 1;
             }
           }
-          coin.vy = -Math.abs(coin.vy) * 0.65;
+          coin.vy = coin.vy > 0 ? -coin.bounceSpeed : coin.bounceSpeed;
           coin.vx *= 0.9;
           coin.bouncesRemaining--;
-          if (Math.abs(coin.vy) < 0.5) {
-            coin.vy = 0;
-          }
         }
       } else {
         const areaWidth = (townState.inShop ? SHOP_COLS : TOWN_AREA_COLS) * TILE_SIZE;
@@ -825,12 +921,9 @@
         const groundY = coin.z ?? coin.y;
         if (coin.y >= groundY) {
           coin.y = groundY;
-          coin.vy = -Math.abs(coin.vy) * 0.6;
+          coin.vy = -coin.bounceSpeed;
           coin.vx *= 0.9;
           coin.bouncesRemaining--;
-          if (Math.abs(coin.vy) < 0.45) {
-            coin.vy = 0;
-          }
         }
       }
 
@@ -1975,26 +2068,42 @@
   // Run one frame of the side-scrolling engine, including physics, AI, and rendering.
   function runSideScrollFrame() {
     updatePlayer();
-    // Swap to the overworld as soon as Link leaves the starting room to the left.
-    if (player.x < -TILE_SIZE / 2) {
+    // Swap to the overworld as soon as Link leaves the starting room to the left when not in a random battle.
+    if (!randomBattleState.active && player.x < -TILE_SIZE / 2) {
       enterOverworldFromSideView();
       return;
     }
+
+    if (randomBattleState.active) {
+      const battleLeft = randomBattleState.areaStartX - TILE_SIZE;
+      const battleRight = randomBattleState.areaStartX + AREA_WIDTH + TILE_SIZE;
+      // Leaving either side of the arena ends the encounter and returns Link to the overworld.
+      if (player.x < battleLeft || player.x + player.width > battleRight) {
+        endRandomBattleAndReturn();
+        return;
+      }
+    }
+
     updateCamera();
 
-    const visibleAreas = getVisibleAreaIndices();
-    const activeOctoroks = [];
-    const activeKnights = [];
-    // Gather the enemies that belong to every area visible in or near the camera.
-    for (const areaIndex of visibleAreas) {
-      const entities = getAreaEntities(areaIndex);
-      // Track the area's octorok if it exists so we can update and render it.
-      if (entities.octorok) {
-        activeOctoroks.push(entities.octorok);
-      }
-      // Every area includes an Armos Knight, so store the reference for later use.
-      if (entities.armosKnight) {
-        activeKnights.push(entities.armosKnight);
+    let activeOctoroks = [];
+    let activeKnights = [];
+    if (randomBattleState.active) {
+      activeOctoroks = randomBattleState.octoroks;
+      activeKnights = randomBattleState.knights;
+    } else {
+      const visibleAreas = getVisibleAreaIndices();
+      // Gather the enemies that belong to every area visible in or near the camera.
+      for (const areaIndex of visibleAreas) {
+        const entities = getAreaEntities(areaIndex);
+        // Track the area's octorok if it exists so we can update and render it.
+        if (entities.octorok) {
+          activeOctoroks.push(entities.octorok);
+        }
+        // Every area includes an Armos Knight, so store the reference for later use.
+        if (entities.armosKnight) {
+          activeKnights.push(entities.armosKnight);
+        }
       }
     }
 
