@@ -356,6 +356,15 @@ function checkOverworldEnemyCollisions() {
   }
 }
 
+// Trigger a random battle when Link bumps into an overworld foe.
+function handleOverworldEnemyCollision() {
+  if (!overworldState.enemyCollisionFlag) return false;
+
+  overworldState.enemyCollisionFlag = false;
+  startRandomBattle(overworldState.lastEnemyCollision, overworldState.lastEnemyCollisionTile);
+  return true;
+}
+
 // Shuffle enemy positions across random walkable tiles so encounters feel fresh after a battle.
 function randomizeOverworldEnemyPositions() {
   const walkable = [];
@@ -415,6 +424,9 @@ function updateOverworld() {
       }
     }
     checkOverworldEnemyCollisions();
+    if (handleOverworldEnemyCollision()) {
+      return;
+    }
     return;
   }
 
@@ -457,11 +469,8 @@ function updateOverworld() {
   }
 
   checkOverworldEnemyCollisions();
-
-  // Immediately launch a random battle when Link touches an overworld foe.
-  if (overworldState.enemyCollisionFlag) {
-    overworldState.enemyCollisionFlag = false;
-    startRandomBattle(overworldState.lastEnemyCollision, overworldState.lastEnemyCollisionTile);
+  if (handleOverworldEnemyCollision()) {
+    return;
   }
 }
 

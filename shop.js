@@ -151,6 +151,12 @@ function drawShopKeeper() {
     keeperWidth * 0.6,
     6
   );
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('Eat something, will ya!', Math.floor(keeperX + keeperWidth / 2), Math.floor(keeperY + bob + keeperHeight + 6));
 }
 
 // Render a simple onigiri icon as a white rice ball.
