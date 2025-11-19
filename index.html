@@ -495,12 +495,14 @@
   }
 
   // Build an octorok instance positioned at the requested world coordinates.
-  function createOctorokAt(x, y) {
+  function createOctorokAt(x, y, facing = -1) {
     return {
       x,
       y,
       width: TILE_SIZE,
       height: TILE_SIZE,
+      // Face left by default but allow callers to override so new spawns can look toward Link.
+      facing,
       vx: 0,
       vy: 0,
       gravity: 0.30,
@@ -820,6 +822,12 @@
       return Math.max(minX, Math.min(maxX, x));
     };
 
+    const playerCenter = centerX + player.width / 2;
+    const faceTowardsPlayer = (enemy) => {
+      const enemyCenter = enemy.x + enemy.width / 2;
+      enemy.facing = enemyCenter < playerCenter ? 1 : -1;
+    };
+
     if (enemyType === 'blob') {
       // Spawn pairs of octoroks mirrored on both sides of Link.
       const octorokGround = (WORLD_ROWS - 2) * TILE_SIZE - TILE_SIZE;
@@ -827,8 +835,10 @@
         // March the octorok pairs outward using the configured offsets.
         const left = createOctorokAt(clampSpawnX(centerX - offset, TILE_SIZE), octorokGround);
         left.onGround = true;
+        faceTowardsPlayer(left);
         const right = createOctorokAt(clampSpawnX(centerX + offset, TILE_SIZE), octorokGround);
         right.onGround = true;
+        faceTowardsPlayer(right);
         randomBattleState.octoroks.push(left, right);
       }
     } else {
@@ -838,8 +848,10 @@
         // Mirror knights on both sides so Link is flanked at matching distances.
         const left = createArmosKnightAt(clampSpawnX(centerX - offset, TILE_SIZE), knightGround);
         left.groundY = knightGround;
+        faceTowardsPlayer(left);
         const right = createArmosKnightAt(clampSpawnX(centerX + offset, TILE_SIZE), knightGround);
         right.groundY = knightGround;
+        faceTowardsPlayer(right);
         randomBattleState.knights.push(left, right);
       }
     }
@@ -1874,11 +1886,11 @@
     ctx.fillRect(x + 3, eyeY, 3, 3);
     ctx.fillRect(x + w - 6, eyeY, 3, 3);
 
-    // Little mouth on its left side
+    // Little mouth on the leading side
     ctx.fillStyle = '#602020';
     const mouthWidth = 4;
     const mouthHeight = 3;
-    const mouthX = x - 1;
+    const mouthX = octorok.facing > 0 ? x + w - mouthWidth - 2 : x + 2;
     const mouthY = y + h / 2 - mouthHeight / 2 + bobOffset;
     ctx.fillRect(Math.floor(mouthX), Math.floor(mouthY), mouthWidth, mouthHeight);
 
@@ -2075,8 +2087,8 @@
     }
 
     if (randomBattleState.active) {
-      const battleLeft = randomBattleState.areaStartX - TILE_SIZE;
-      const battleRight = randomBattleState.areaStartX + AREA_WIDTH + TILE_SIZE;
+      const battleLeft = randomBattleState.areaStartX;
+      const battleRight = randomBattleState.areaStartX + AREA_WIDTH;
       // Leaving either side of the arena ends the encounter and returns Link to the overworld.
       if (player.x < battleLeft || player.x + player.width > battleRight) {
         endRandomBattleAndReturn();

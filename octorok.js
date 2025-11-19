@@ -1,12 +1,14 @@
 // Octorok enemy: creation, AI, projectiles, collision helpers, particles, and drawing.
 
 // Build an octorok instance positioned at the requested world coordinates.
-function createOctorokAt(x, y) {
+function createOctorokAt(x, y, facing = -1) {
   return {
     x,
     y,
     width: TILE_SIZE,
     height: TILE_SIZE,
+    // Face left by default but allow callers to override so new spawns can look toward Link.
+    facing,
     vx: 0,
     vy: 0,
     gravity: 0.30,
@@ -29,13 +31,14 @@ function createOctorokAt(x, y) {
 }
 
 // Kick off the octorok's defeat sequence so it can play a brief poof before disappearing.
-function startOctorokDeath(octorok) {
+function startOctorokDeath(octorok, knockDir = 0) {
   octorok.lifeState = 'dying';
   octorok.deathTimer = 26;
   octorok.hitTimer = 0;
-  // Pop upward and freeze its AI movement while the poof counts down.
-  octorok.vx = 0;
-  octorok.vy = -3.2;
+  // Pop upward and fling backward while freezing its AI movement during the poof countdown.
+  const launchDir = knockDir !== 0 ? knockDir : (octorok.facing || 1);
+  octorok.vx = launchDir * 2.6;
+  octorok.vy = -4.2;
   octorok.onGround = false;
 }
 
@@ -92,9 +95,11 @@ function drawOctorok(octorok) {
   ctx.fillRect(x + 3, eyeY, 3, 3);
   ctx.fillRect(x + w - 6, eyeY, 3, 3);
 
-  // Little mouth on its left side.
+  // Little mouth on the leading side.
   ctx.fillStyle = '#602020';
-  ctx.fillRect(x + 2, y + h - 4 - tentacleLift, 4, 3);
+  const mouthWidth = 4;
+  const mouthX = octorok.facing > 0 ? x + w - mouthWidth - 2 : x + 2;
+  ctx.fillRect(mouthX, y + h - 4 - tentacleLift, mouthWidth, 3);
 
   if (fading) {
     ctx.restore();
@@ -220,6 +225,19 @@ function updateOctorok(octorok) {
 
   // Play out the short death hop and despawn timer before removing the body.
   if (octorok.lifeState === 'dying') {
+    // Keep sliding backward during the death arc until bumping into terrain.
+    const newX = octorok.x + octorok.vx;
+    if (!rectVsWorld(newX, octorok.y, octorok.width, octorok.height)) {
+      octorok.x = newX;
+    } else {
+      octorok.vx = 0;
+    }
+
+    // Apply light friction so the slide eases out when grounded.
+    if (octorok.onGround) {
+      octorok.vx *= 0.9;
+    }
+
     octorok.vy += octorok.gravity;
     if (octorok.vy > octorok.maxFall) octorok.vy = octorok.maxFall;
 
@@ -234,6 +252,7 @@ function updateOctorok(octorok) {
       }
       octorok.vy = 0;
       octorok.onGround = true;
+      octorok.vx = 0;
     }
 
     // Fade away after the brief death timer expires.
@@ -252,6 +271,13 @@ function updateOctorok(octorok) {
       octorok.lifeState = 'dead';
     }
     return;
+  }
+
+  // Face toward Link whenever the octorok is active so shots travel the right direction.
+  if (octorok.hitTimer === 0) {
+    const playerCenter = player.x + player.width / 2;
+    const octorokCenter = octorok.x + octorok.width / 2;
+    octorok.facing = playerCenter < octorokCenter ? -1 : 1;
   }
 
   octorok.prevVy = octorok.vy;
@@ -282,9 +308,12 @@ function updateOctorok(octorok) {
         } else if (octorok.state === 'waitAfterJump') {
           // Grounded shot
           const mouthSize = 4;
-          const mouthX = octorok.x - 2;
+          const mouthX = octorok.facing > 0
+            ? octorok.x + octorok.width - mouthSize - 2
+            : octorok.x - 2;
           const mouthY = octorok.y + octorok.height / 2 - mouthSize / 2;
-          spawnRock(mouthX - 2, mouthY, -2.5, 0);
+          const spawnX = mouthX + (octorok.facing > 0 ? mouthSize : 0);
+          spawnRock(spawnX, mouthY, 2.5 * octorok.facing, 0);
           // Now wait again before the next jump+shoot
           octorok.state = 'waitAfterShot';
           octorok.stateTimer = 60;
@@ -355,9 +384,12 @@ function updateOctorok(octorok) {
       octorok.prevVy <= 0 && octorok.vy > 0 &&
       octorok.state === 'jump') {
     const mouthSize = 4;
-    const mouthX = octorok.x - 2;
+    const mouthX = octorok.facing > 0
+      ? octorok.x + octorok.width - mouthSize - 2
+      : octorok.x - 2;
     const mouthY = octorok.y + octorok.height / 2 - mouthSize / 2;
-    spawnRock(mouthX - 2, mouthY, -2.5, 0);
+    const spawnX = mouthX + (octorok.facing > 0 ? mouthSize : 0);
+    spawnRock(spawnX, mouthY, 2.5 * octorok.facing, 0);
     octorok.shotThisJump = true;
   }
 
@@ -393,7 +425,10 @@ function handleOctorokPlayerInteractions(octorok) {
       octorok.vx = 3 * knockDir;
       octorok.vy = -2.5;
     } else {
-      startOctorokDeath(octorok);
+      const playerCenter = player.x + player.width / 2;
+      const octorokCenter = octorok.x + octorok.width / 2;
+      const awayFromPlayer = Math.sign(octorokCenter - playerCenter) || 1;
+      startOctorokDeath(octorok, awayFromPlayer);
     }
   }
 
