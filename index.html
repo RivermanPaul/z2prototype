@@ -752,15 +752,14 @@
     const size = Math.floor(TILE_SIZE * 0.7);
     const spawnX = x + width / 2 - size / 2;
     const spawnY = y + height / 2 - size / 2;
-    const horizontalKick = (Math.random() * 1.5 + 0.5) * (Math.random() < 0.5 ? -1 : 1);
     coins.push({
       x: spawnX,
       y: spawnY,
       z: mode === GAME_MODE_RAISED ? (groundZ ?? spawnY) : null,
       width: size,
       height: size,
-      vx: horizontalKick,
-      vy: -5.4,
+      vx: 0,
+      vy: -7,
       gravity: 0.35,
       maxFall: 8,
       bouncesRemaining: 4,

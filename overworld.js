@@ -40,8 +40,18 @@ function initOverworld(tileSize) {
     moveTimer: 0,
     moveDuration: 8,
     facing: 'left',
-    pendingTileInteraction: false
+    pendingTileInteraction: false,
+    enemies: [],
+    enemyCollisionFlag: false,
+    enemyCollisionCooldown: 0
   };
+
+  // Seed a handful of simple overworld foes so the map feels alive.
+  overworldState.enemies = [
+    createOverworldEnemy('blob', 6, 2),
+    createOverworldEnemy('blob', 14, 6),
+    createOverworldEnemy('beast', 10, 9)
+  ].filter((enemy) => overworldTileWalkable(overworldTileAt(enemy.tileX, enemy.tileY)));
 
   // Precompute the overworld tiles that represent the town entrance so we can map exits back to each side.
   townEntranceTiles = (() => {
@@ -84,6 +94,134 @@ function closestTownEntrance(side, targetY) {
     }
   }
   return best;
+}
+
+// Build a lightweight overworld enemy that roams a single tile at a time.
+function createOverworldEnemy(type, tileX, tileY) {
+  return {
+    type,
+    tileX,
+    tileY,
+    moving: false,
+    moveFrom: { x: tileX, y: tileY },
+    moveTo: { x: tileX, y: tileY },
+    moveTimer: 0,
+    // Faster beasts step through tiles more quickly than blobs.
+    moveDuration: type === 'beast' ? 6 : 10,
+    pauseTimer: 18,
+    chasing: false,
+    chaseTilesRemaining: 0,
+    chaseCooldown: 0
+  };
+}
+
+// Pick a random direction that remains inside walkable terrain.
+function randomEnemyStep(tileX, tileY) {
+  const options = [
+    { dx: 1, dy: 0 },
+    { dx: -1, dy: 0 },
+    { dx: 0, dy: 1 },
+    { dx: 0, dy: -1 }
+  ];
+  const valid = options.filter((dir) => overworldTileWalkable(overworldTileAt(tileX + dir.dx, tileY + dir.dy)));
+  if (valid.length === 0) return null;
+  return valid[Math.floor(Math.random() * valid.length)];
+}
+
+// Kick off an enemy move toward the requested delta.
+function beginEnemyMove(enemy, dx, dy) {
+  enemy.moving = true;
+  enemy.moveTimer = 0;
+  enemy.moveFrom = { x: enemy.tileX, y: enemy.tileY };
+  enemy.moveTo = { x: enemy.tileX + dx, y: enemy.tileY + dy };
+}
+
+// Move one enemy toward its target, handling chase and pause states.
+function updateOverworldEnemy(enemy) {
+  if (enemy.moving) {
+    enemy.moveTimer++;
+    if (enemy.moveTimer >= enemy.moveDuration) {
+      enemy.tileX = enemy.moveTo.x;
+      enemy.tileY = enemy.moveTo.y;
+      enemy.moving = false;
+      enemy.moveTimer = 0;
+      enemy.pauseTimer = enemy.type === 'beast' ? 12 + Math.floor(Math.random() * 8) : 18 + Math.floor(Math.random() * 10);
+      if (enemy.chasing) {
+        enemy.chaseTilesRemaining = Math.max(0, enemy.chaseTilesRemaining - 1);
+        if (enemy.chaseTilesRemaining === 0) {
+          enemy.chasing = false;
+          enemy.chaseCooldown = 90;
+        }
+      }
+    }
+    return;
+  }
+
+  if (enemy.chaseCooldown > 0) {
+    enemy.chaseCooldown--;
+  }
+
+  // Allow beasts to aggro when Link wanders near them.
+  if (
+    enemy.type === 'beast' &&
+    !enemy.chasing &&
+    enemy.chaseCooldown === 0
+  ) {
+    const dx = Math.abs(enemy.tileX - overworldState.playerTileX);
+    const dy = Math.abs(enemy.tileY - overworldState.playerTileY);
+    if (dx + dy <= 2) {
+      enemy.chasing = true;
+      enemy.chaseTilesRemaining = 5;
+    }
+  }
+
+  if (enemy.pauseTimer > 0) {
+    enemy.pauseTimer--;
+    return;
+  }
+
+  let step = null;
+  // When aggroed, choose a direction that marches toward the player's tile.
+  if (enemy.chasing) {
+    const dx = overworldState.playerTileX - enemy.tileX;
+    const dy = overworldState.playerTileY - enemy.tileY;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      step = { dx: dx > 0 ? 1 : -1, dy: 0 };
+    } else if (dy !== 0) {
+      step = { dx: 0, dy: dy > 0 ? 1 : -1 };
+    }
+    // If the preferred chase vector is blocked, fall back to a random step.
+    if (step && !overworldTileWalkable(overworldTileAt(enemy.tileX + step.dx, enemy.tileY + step.dy))) {
+      step = null;
+    }
+  }
+
+  // Fall back to simple wandering when not chasing.
+  if (!step) {
+    step = randomEnemyStep(enemy.tileX, enemy.tileY);
+  }
+
+  if (enemy.chasing && !step) {
+    enemy.chaseTilesRemaining = Math.max(0, enemy.chaseTilesRemaining - 1);
+    if (enemy.chaseTilesRemaining === 0) {
+      enemy.chasing = false;
+      enemy.chaseCooldown = 90;
+    }
+  }
+
+  // Start moving if a valid direction exists; otherwise pause briefly and try again.
+  if (step) {
+    beginEnemyMove(enemy, step.dx, step.dy);
+  } else {
+    enemy.pauseTimer = 12;
+  }
+}
+
+// Update every overworld enemy so they animate alongside the player.
+function updateOverworldEnemies() {
+  for (const enemy of overworldState.enemies) {
+    updateOverworldEnemy(enemy);
+  }
 }
 
 // Enter the overworld when Link exits the starting room to the left.
@@ -143,9 +281,40 @@ function overworldTileAt(x, y) {
   return overworldState.map[y][x];
 }
 
+// Track collisions between Link and overworld enemies without deleting the foe yet.
+function checkOverworldEnemyCollisions() {
+  overworldState.enemyCollisionFlag = false;
+
+  if (overworldState.enemyCollisionCooldown > 0) {
+    overworldState.enemyCollisionCooldown--;
+  }
+
+  const playerTileX = overworldState.moving ? overworldState.moveTo.x : overworldState.playerTileX;
+  const playerTileY = overworldState.moving ? overworldState.moveTo.y : overworldState.playerTileY;
+
+  for (const enemy of overworldState.enemies) {
+    const enemyTileX = enemy.moving ? enemy.moveTo.x : enemy.tileX;
+    const enemyTileY = enemy.moving ? enemy.moveTo.y : enemy.tileY;
+    if (
+      overworldState.enemyCollisionCooldown === 0 &&
+      playerTileX === enemyTileX &&
+      playerTileY === enemyTileY
+    ) {
+      // Keep the enemy alive but mark that a collision occurred so the combat encounter can hook in later.
+      overworldState.enemyCollisionFlag = true;
+      overworldState.lastEnemyCollision = enemy.type;
+      overworldState.enemyCollisionCooldown = 18;
+      break;
+    }
+  }
+}
+
 // Handle tile-based overworld movement using discrete steps between grid cells.
 function updateOverworld() {
   const inputKeys = combinedInputKeys();
+
+  // Animate roaming overworld enemies alongside player movement.
+  updateOverworldEnemies();
 
   // Advance any in-progress movement so Link smoothly glides between tiles.
   if (overworldState.moving) {
@@ -162,6 +331,7 @@ function updateOverworld() {
         returnToSideScrollFromOverworld();
       }
     }
+    checkOverworldEnemyCollisions();
     return;
   }
 
@@ -202,6 +372,8 @@ function updateOverworld() {
       break;
     }
   }
+
+  checkOverworldEnemyCollisions();
 }
 
 // Render the overworld top-down map using simple color-coded tiles.
@@ -247,6 +419,21 @@ function drawOverworld() {
     ctx.fillRect(tile.px + 4, tile.py + 2, overworldState.tileSize - 8, overworldState.tileSize - 4);
     ctx.fillStyle = '#808080';
     ctx.fillRect(tile.px + 6, tile.py + 6, overworldState.tileSize - 12, overworldState.tileSize - 10);
+  }
+
+  // Draw roaming overworld enemies with a small inset square so they stand apart from Link.
+  for (const enemy of overworldState.enemies) {
+    const enemyProgress = enemy.moving ? Math.min(1, enemy.moveTimer / enemy.moveDuration) : 0;
+    const enemyBaseX = enemy.tileX * overworldState.tileSize;
+    const enemyBaseY = enemy.tileY * overworldState.tileSize;
+    const enemyOffsetX = enemy.moving ? (enemy.moveTo.x - enemy.moveFrom.x) * overworldState.tileSize * enemyProgress : 0;
+    const enemyOffsetY = enemy.moving ? (enemy.moveTo.y - enemy.moveFrom.y) * overworldState.tileSize * enemyProgress : 0;
+    const drawX = TILE_SIZE * 2 + enemyBaseX + enemyOffsetX;
+    const drawY = TILE_SIZE * 2 + enemyBaseY + enemyOffsetY;
+    ctx.fillStyle = enemy.type === 'beast' ? '#b44747' : '#7c6de6';
+    ctx.fillRect(drawX + 4, drawY + 4, overworldState.tileSize - 8, overworldState.tileSize - 8);
+    ctx.fillStyle = enemy.type === 'beast' ? '#6b2020' : '#4433aa';
+    ctx.fillRect(drawX + 6, drawY + 6, overworldState.tileSize - 12, overworldState.tileSize - 12);
   }
 
   // Compute the player's interpolated position while stepping between tiles.
