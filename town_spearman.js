@@ -254,7 +254,7 @@ function updateTownParticles() {
 // Render active town particles relative to the current camera.
 function drawTownParticles() {
   for (const p of townParticles) {
-    ctx.fillStyle = 'rgba(255, 220, 200, 0.85)';
+    ctx.fillStyle = p.color || 'rgba(255, 220, 200, 0.85)';
     ctx.fillRect(Math.floor(p.x - cameraX), Math.floor(p.y), 2, 2);
   }
 }
