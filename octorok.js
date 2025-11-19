@@ -19,16 +19,59 @@ function createOctorokAt(x, y) {
     state: 'waitAfterShot',
     stateTimer: 120,
     idleAnimTimer: 0,
-    idleAnimFrame: 0
+    idleAnimFrame: 0,
+    // Track a small health pool so Link needs multiple strikes to defeat the octorok.
+    hp: 2,
+    // Separate lifecycle state machine so we can play a death animation.
+    lifeState: 'alive',
+    deathTimer: 0
   };
+}
+
+// Kick off the octorok's defeat sequence so it can play a brief poof before disappearing.
+function startOctorokDeath(octorok) {
+  octorok.lifeState = 'dying';
+  octorok.deathTimer = 26;
+  octorok.hitTimer = 0;
+  // Pop upward and freeze its AI movement while the poof counts down.
+  octorok.vx = 0;
+  octorok.vy = -3.2;
+  octorok.onGround = false;
+}
+
+// Spawn a generic defeat poof so enemies vanish with a little flourish.
+function spawnEnemyPoof(x, y) {
+  const count = 10;
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count;
+    const speed = 1.2 + Math.random() * 0.6;
+    particles.push({
+      x,
+      y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed * 0.8 - 0.4,
+      life: 22
+    });
+  }
 }
 
 // Draw the octorok enemy with its simple animation cues.
 function drawOctorok(octorok) {
+  // Skip rendering once the death poof completed.
+  if (octorok.lifeState === 'dead') return;
+
   const x = Math.floor(octorok.x - cameraX);
   const y = Math.floor(octorok.y);
   const w = octorok.width;
   const h = octorok.height;
+  const fading = octorok.lifeState === 'dying';
+
+  // Fade the sprite out as the death timer approaches zero.
+  if (fading) {
+    const fade = Math.max(0, octorok.deathTimer) / 26;
+    ctx.save();
+    ctx.globalAlpha = 0.25 + fade * 0.75;
+  }
   // Compute the small bobbing offset used by the idle animation.
   const bobOffset = octorok.idleAnimFrame === 0 ? 0 : 1;
   // Compute how far the tentacles lift to create a two-frame cycle.
@@ -52,6 +95,10 @@ function drawOctorok(octorok) {
   // Little mouth on its left side.
   ctx.fillStyle = '#602020';
   ctx.fillRect(x + 2, y + h - 4 - tentacleLift, 4, 3);
+
+  if (fading) {
+    ctx.restore();
+  }
 }
 
 // Create a new octorok projectile and add it to the active list.
@@ -168,6 +215,38 @@ function updateRocksAndParticles() {
 
 // Advance the octorok AI, including movement, attacks, and reactions to damage.
 function updateOctorok(octorok) {
+  // Skip any further processing once the enemy finished its death poof.
+  if (octorok.lifeState === 'dead') return;
+
+  // Play out the short death hop and despawn timer before removing the body.
+  if (octorok.lifeState === 'dying') {
+    octorok.vy += octorok.gravity;
+    if (octorok.vy > octorok.maxFall) octorok.vy = octorok.maxFall;
+
+    const newY = octorok.y + octorok.vy;
+    if (!rectVsWorld(octorok.x, newY, octorok.width, octorok.height)) {
+      octorok.y = newY;
+      octorok.onGround = false;
+    } else {
+      // Land on the ground and stop falling.
+      while (!rectVsWorld(octorok.x, octorok.y + 1, octorok.width, octorok.height)) {
+        octorok.y += 1;
+      }
+      octorok.vy = 0;
+      octorok.onGround = true;
+    }
+
+    // Fade away after the brief death timer expires.
+    if (octorok.deathTimer > 0) {
+      octorok.deathTimer--;
+    }
+    if (octorok.deathTimer === 0) {
+      spawnEnemyPoof(octorok.x + octorok.width / 2, octorok.y + octorok.height / 2);
+      octorok.lifeState = 'dead';
+    }
+    return;
+  }
+
   octorok.prevVy = octorok.vy;
 
   // State machine: jump+shoot -> wait -> ground shoot -> wait -> repeat
@@ -291,15 +370,24 @@ function updateOctorok(octorok) {
   }
 }
 
-// Resolve Link's sword strikes and collision responses against a specific octorok.
+  // Resolve Link's sword strikes and collision responses against a specific octorok.
 function handleOctorokPlayerInteractions(octorok) {
+  // Ignore defeated enemies so their bodies no longer interact.
+  if (octorok.lifeState !== 'alive') return;
+
   const sword = swordHitbox();
   // Only damage the enemy when Link is actively stabbing and the octorok is vulnerable.
   if (sword && rectsOverlap(sword, octorok) && octorok.hitTimer === 0) {
-    octorok.hitTimer = 10;
-    const knockDir = player.facing;
-    octorok.vx = 3 * knockDir;
-    octorok.vy = -2.5;
+    octorok.hp--;
+    // Play a brief hit flash whenever health remains.
+    if (octorok.hp > 0) {
+      octorok.hitTimer = 10;
+      const knockDir = player.facing;
+      octorok.vx = 3 * knockDir;
+      octorok.vy = -2.5;
+    } else {
+      startOctorokDeath(octorok);
+    }
   }
 
   // Evaluate body collisions only when Link is not already recovering from damage.

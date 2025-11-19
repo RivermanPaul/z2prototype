@@ -513,7 +513,11 @@
       state: 'waitAfterShot',
       stateTimer: 120,
       idleAnimTimer: 0,
-      idleAnimFrame: 0
+      idleAnimFrame: 0,
+      // Track a small health pool so Link needs multiple strikes to defeat the octorok.
+      hp: 2,
+      lifeState: 'alive',
+      deathTimer: 0
     };
   }
 
@@ -1621,10 +1625,21 @@
 
   // Draw the octorok enemy with its simple animation cues.
   function drawOctorok(octorok) {
+    // Skip rendering once the death poof completed.
+    if (octorok.lifeState === 'dead') return;
+
     const x = Math.floor(octorok.x - cameraX);
     const y = Math.floor(octorok.y);
     const w = octorok.width;
     const h = octorok.height;
+    const fading = octorok.lifeState === 'dying';
+
+    // Fade the sprite out as the death timer approaches zero.
+    if (fading) {
+      const fade = Math.max(0, octorok.deathTimer) / 26;
+      ctx.save();
+      ctx.globalAlpha = 0.25 + fade * 0.75;
+    }
     // Compute the small bobbing offset used by the idle animation.
     const bobOffset = octorok.idleAnimFrame === 0 ? 0 : 1;
     // Compute how far the tentacles lift to create a two-frame cycle.
@@ -1657,14 +1672,29 @@
     ctx.fillStyle = '#ff905c';
     const tentacleY = y + h - 3 - tentacleLift + bobOffset;
     ctx.fillRect(x, tentacleY, w, 3);
+
+    if (fading) {
+      ctx.restore();
+    }
   }
 
   // Render the Armos Knight along with its shield and sword indicators.
   function drawArmosKnight(knight) {
+    // Do not draw the knight after the poof ends.
+    if (knight.lifeState === 'dead') return;
+
     const renderX = Math.floor(knight.x - cameraX);
     const renderY = Math.floor(knight.y);
     const w = knight.width;
     const h = knight.height;
+    const fading = knight.lifeState === 'dying';
+
+    // Fade the sprite out as the death animation wraps up.
+    if (fading) {
+      const fade = Math.max(0, knight.deathTimer) / 36;
+      ctx.save();
+      ctx.globalAlpha = 0.25 + fade * 0.75;
+    }
 
     // Flash white while in hitstun to provide quick feedback.
     if (knight.hitTimer > 0 && (knight.hitTimer % 4 < 2)) {
@@ -1693,30 +1723,36 @@
     ctx.fillStyle = '#d89060';
     ctx.fillRect(renderX, renderY, w, Math.floor(TILE_SIZE / 2));
 
-    const shield = knightShieldHitbox(knight);
-    ctx.fillStyle = '#c4c8d8';
-    ctx.fillRect(Math.floor(shield.x - cameraX), Math.floor(shield.y), shield.width, shield.height);
-    ctx.fillStyle = '#8a8fa8';
-    ctx.fillRect(Math.floor(shield.x - cameraX) + 1, Math.floor(shield.y) + 2, shield.width - 2, shield.height - 4);
+    if (!fading) {
+      const shield = knightShieldHitbox(knight);
+      ctx.fillStyle = '#c4c8d8';
+      ctx.fillRect(Math.floor(shield.x - cameraX), Math.floor(shield.y), shield.width, shield.height);
+      ctx.fillStyle = '#8a8fa8';
+      ctx.fillRect(Math.floor(shield.x - cameraX) + 1, Math.floor(shield.y) + 2, shield.width - 2, shield.height - 4);
 
-    const swordPose = knightSwordPose(knight);
-    // Only draw the sword when the animation is active.
-    if (swordPose) {
-      const { rect, phase } = swordPose;
-      const swordScreenX = Math.floor(rect.x - cameraX);
-      const swordScreenY = Math.floor(rect.y);
-      ctx.fillStyle = phase === 'windup' ? '#ffd480' : '#f0f0f0';
-      ctx.fillRect(swordScreenX, swordScreenY, rect.width, rect.height);
-      // Add a subtle glow during the windup so players can spot the upcoming strike.
-      if (phase === 'windup') {
-        ctx.fillStyle = 'rgba(255, 215, 130, 0.35)';
-        ctx.fillRect(swordScreenX - 1, swordScreenY - 1, rect.width + 2, rect.height + 2);
+      const swordPose = knightSwordPose(knight);
+      // Only draw the sword when the animation is active.
+      if (swordPose) {
+        const { rect, phase } = swordPose;
+        const swordScreenX = Math.floor(rect.x - cameraX);
+        const swordScreenY = Math.floor(rect.y);
+        ctx.fillStyle = phase === 'windup' ? '#ffd480' : '#f0f0f0';
+        ctx.fillRect(swordScreenX, swordScreenY, rect.width, rect.height);
+        // Add a subtle glow during the windup so players can spot the upcoming strike.
+        if (phase === 'windup') {
+          ctx.fillStyle = 'rgba(255, 215, 130, 0.35)';
+          ctx.fillRect(swordScreenX - 1, swordScreenY - 1, rect.width + 2, rect.height + 2);
+        }
+        ctx.fillStyle = '#c8a060';
+        const hiltX = knight.facing > 0
+          ? Math.floor(knight.x + knight.width - cameraX)
+          : Math.floor(knight.x - 6 - cameraX);
+        ctx.fillRect(hiltX, swordScreenY - 2, 6, 2);
       }
-      ctx.fillStyle = '#c8a060';
-      const hiltX = knight.facing > 0
-        ? Math.floor(knight.x + knight.width - cameraX)
-        : Math.floor(knight.x - 6 - cameraX);
-      ctx.fillRect(hiltX, swordScreenY - 2, 6, 2);
+    }
+
+    if (fading) {
+      ctx.restore();
     }
   }
 
