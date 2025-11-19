@@ -282,6 +282,35 @@ function overworldTileAt(x, y) {
   return overworldState.map[y][x];
 }
 
+// Calculate the world position of an overworld actor based on its tile and current movement.
+function overworldEntityPosition(tileX, tileY, moving, moveFrom, moveTo, moveTimer, moveDuration) {
+  if (moving) {
+    const progress = Math.min(1, moveTimer / moveDuration);
+    return {
+      x: (moveFrom.x + (moveTo.x - moveFrom.x) * progress) * overworldState.tileSize,
+      y: (moveFrom.y + (moveTo.y - moveFrom.y) * progress) * overworldState.tileSize
+    };
+  }
+  return { x: tileX * overworldState.tileSize, y: tileY * overworldState.tileSize };
+}
+
+// Build an axis-aligned bounding box that is slightly smaller than a tile for lenient collisions.
+function overworldCollisionBox(position) {
+  const inset = overworldState.tileSize * 0.1;
+  const size = overworldState.tileSize - inset * 2;
+  return {
+    x: position.x + inset,
+    y: position.y + inset,
+    width: size,
+    height: size
+  };
+}
+
+// Check whether two axis-aligned bounding boxes overlap.
+function boxesOverlap(a, b) {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
 // Track collisions between Link and overworld enemies without deleting the foe yet.
 function checkOverworldEnemyCollisions() {
   overworldState.enemyCollisionFlag = false;
@@ -290,21 +319,37 @@ function checkOverworldEnemyCollisions() {
     overworldState.enemyCollisionCooldown--;
   }
 
-  const playerTileX = overworldState.moving ? overworldState.moveTo.x : overworldState.playerTileX;
-  const playerTileY = overworldState.moving ? overworldState.moveTo.y : overworldState.playerTileY;
+  const playerPosition = overworldEntityPosition(
+    overworldState.playerTileX,
+    overworldState.playerTileY,
+    overworldState.moving,
+    overworldState.moveFrom,
+    overworldState.moveTo,
+    overworldState.moveTimer,
+    overworldState.moveDuration
+  );
+  const playerBox = overworldCollisionBox(playerPosition);
 
   for (const enemy of overworldState.enemies) {
-    const enemyTileX = enemy.moving ? enemy.moveTo.x : enemy.tileX;
-    const enemyTileY = enemy.moving ? enemy.moveTo.y : enemy.tileY;
-    if (
-      overworldState.enemyCollisionCooldown === 0 &&
-      playerTileX === enemyTileX &&
-      playerTileY === enemyTileY
-    ) {
+    const enemyPosition = overworldEntityPosition(
+      enemy.tileX,
+      enemy.tileY,
+      enemy.moving,
+      enemy.moveFrom,
+      enemy.moveTo,
+      enemy.moveTimer,
+      enemy.moveDuration
+    );
+    const enemyBox = overworldCollisionBox(enemyPosition);
+
+    if (overworldState.enemyCollisionCooldown === 0 && boxesOverlap(playerBox, enemyBox)) {
       // Keep the enemy alive but mark that a collision occurred so the combat encounter can hook in later.
       overworldState.enemyCollisionFlag = true;
       overworldState.lastEnemyCollision = enemy.type;
-      overworldState.lastEnemyCollisionTile = { x: playerTileX, y: playerTileY };
+      overworldState.lastEnemyCollisionTile = {
+        x: Math.max(0, Math.min(overworldState.width - 1, Math.round(playerPosition.x / overworldState.tileSize))),
+        y: Math.max(0, Math.min(overworldState.height - 1, Math.round(playerPosition.y / overworldState.tileSize)))
+      };
       overworldState.enemyCollisionCooldown = 18;
       break;
     }
