@@ -344,6 +344,7 @@ function handleArmosKnightVsPlayer(knight) {
       player.attacking = false;
       player.attackTimer = 0;
       player.blockedThisSwing = false;
+      applyPlayerDamage(1);
     }
   }
 
@@ -365,6 +366,7 @@ function handleArmosKnightVsPlayer(knight) {
       player.attacking = false;
       player.attackTimer = 0;
       player.blockedThisSwing = false;
+      applyPlayerDamage(1);
     } else if (shieldBlocksSword && !knight.blockedThisSwing) {
       // Bounce both fighters apart when Link successfully blocks the stab.
       const blockDir = knight.facing;

@@ -511,5 +511,7 @@ function drawOverworld() {
   } else {
     ctx.fillRect(playerDrawX + overworldState.tileSize / 2 - 1, playerDrawY + overworldState.tileSize - 6, 2, 4);
   }
+
+  drawHud();
 }
 

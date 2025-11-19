@@ -2,9 +2,14 @@
 
 // Store short-lived particle bursts for town-only effects like the spearman's defeat poof.
 const townParticles = [];
+// Store temporary warning markers created when Link harms a townsperson.
+const townPenaltyMarks = [];
 
 // Build a Town Spearman positioned at the requested plaza coordinates.
-function createTownSpearmanAt(x, z, facing = 1) {
+function createTownSpearmanAt(x, z, facing = 1, options = {}) {
+  const speedScale = options.speedScale ?? 1;
+  const speed = (options.speed ?? 1.2) * speedScale;
+  const verticalSpeed = (options.vz ?? 0.8) * speedScale;
   return {
     x,
     z,
@@ -12,10 +17,10 @@ function createTownSpearmanAt(x, z, facing = 1) {
     width: TILE_SIZE,
     height: Math.floor(TILE_SIZE * 1.5),
     // Marching speed along the horizontal axis so the spearman constantly advances.
-    speed: 1.2,
-    vx: 1.2 * facing,
+    speed,
+    vx: speed * facing,
     // Optional depth drift when steering around walls.
-    vz: 0.8,
+    vz: verticalSpeed,
     verticalDir: Math.random() < 0.5 ? -1 : 1,
     swapVerticalNext: Math.random() < 0.5,
     movingVertically: false,
@@ -23,7 +28,12 @@ function createTownSpearmanAt(x, z, facing = 1) {
     state: 'patrol',
     vy: 0,
     gravity: 0.35,
-    poofed: false
+    poofed: false,
+    dropCoin: options.dropCoin !== false,
+    harmless: !!options.harmless,
+    hasSpear: options.hasSpear !== false,
+    palette: options.palette || null,
+    type: options.type || 'spearman'
   };
 }
 
@@ -47,14 +57,23 @@ function updateTownSpearman(spearman) {
       // Emit a tiny poof the first frame he touches down after being struck.
       if (!spearman.poofed) {
         spawnTownPoof(spearman.x + spearman.width / 2, spearman.y + spearman.height / 2);
-        spawnCoinFromEnemy(
-          spearman.x,
-          spearman.z,
-          spearman.width,
-          spearman.height,
-          GAME_MODE_RAISED,
-          spearman.z
-        );
+        if (spearman.dropCoin) {
+          spawnCoinFromEnemy(
+            spearman.x,
+            spearman.z,
+            spearman.width,
+            spearman.height,
+            GAME_MODE_RAISED,
+            spearman.z
+          );
+        } else {
+          spawnTownPenaltyMark(
+            spearman.x + spearman.width / 2,
+            spearman.z + spearman.height / 2
+          );
+          player.hitTimer = Math.max(player.hitTimer, 16);
+          applyPlayerDamage(1);
+        }
         spearman.poofed = true;
       }
       // Remove the enemy after the effect plays.
@@ -140,6 +159,8 @@ function handleTownSpearmanVsPlayer(spearman) {
     return;
   }
 
+  if (spearman.harmless) return;
+
   // Only apply damage when Link is currently vulnerable.
   if (player.hitTimer === 0) {
     const playerBox = {
@@ -157,6 +178,7 @@ function handleTownSpearmanVsPlayer(spearman) {
       player.attacking = false;
       player.attackTimer = 0;
       player.blockedThisSwing = false;
+      applyPlayerDamage(1);
     }
   }
 }
@@ -171,23 +193,28 @@ function drawTownSpearman(spearman) {
   // Dim defeated spearmen so their flight reads separately from active patrols.
   if (spearman.state === 'defeated') {
     ctx.fillStyle = '#c0c0c0';
+  } else if (spearman.harmless) {
+    const friendlyBody = spearman.palette?.body || '#d8aa5a';
+    ctx.fillStyle = friendlyBody;
   } else {
     ctx.fillStyle = '#3c70b0';
   }
   ctx.fillRect(x, y, w, h);
 
   // Spear shaft sticking out ahead of the spearman.
-  const spearLength = TILE_SIZE;
-  const spearWidth = 3;
-  const spearX = spearman.facing > 0 ? x + w - 1 : x - spearLength + 1;
-  const spearY = y + Math.floor(h * 0.35);
-  ctx.fillStyle = '#c09060';
-  ctx.fillRect(spearX, spearY, spearLength, spearWidth);
+  if (spearman.hasSpear) {
+    const spearLength = TILE_SIZE;
+    const spearWidth = 3;
+    const spearX = spearman.facing > 0 ? x + w - 1 : x - spearLength + 1;
+    const spearY = y + Math.floor(h * 0.35);
+    ctx.fillStyle = '#c09060';
+    ctx.fillRect(spearX, spearY, spearLength, spearWidth);
 
-  // Spear tip.
-  ctx.fillStyle = '#e0e0f0';
-  const tipX = spearman.facing > 0 ? spearX + spearLength - 2 : spearX;
-  ctx.fillRect(tipX, spearY - 1, 3, spearWidth + 2);
+    // Spear tip.
+    ctx.fillStyle = '#e0e0f0';
+    const tipX = spearman.facing > 0 ? spearX + spearLength - 2 : spearX;
+    ctx.fillRect(tipX, spearY - 1, 3, spearWidth + 2);
+  }
 }
 
 // Emit a small burst of particles used for the spearman's defeat poof.
@@ -230,4 +257,40 @@ function drawTownParticles() {
     ctx.fillStyle = 'rgba(255, 220, 200, 0.85)';
     ctx.fillRect(Math.floor(p.x - cameraX), Math.floor(p.y), 2, 2);
   }
+}
+
+// Spawn a short-lived X decal at the given plaza coordinates.
+function spawnTownPenaltyMark(x, z) {
+  townPenaltyMarks.push({ x, z, life: 120 });
+}
+
+// Age out X decals that remind the player to behave in town.
+function updateTownPenaltyMarks() {
+  for (const mark of townPenaltyMarks) {
+    mark.life--;
+  }
+  for (let i = townPenaltyMarks.length - 1; i >= 0; i--) {
+    if (townPenaltyMarks[i].life <= 0) {
+      townPenaltyMarks.splice(i, 1);
+    }
+  }
+}
+
+// Render each warning X relative to the active camera.
+function drawTownPenaltyMarks() {
+  ctx.save();
+  ctx.strokeStyle = '#f26f6f';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  for (const mark of townPenaltyMarks) {
+    const x = Math.floor(mark.x - cameraX);
+    const y = Math.floor(mark.z);
+    ctx.beginPath();
+    ctx.moveTo(x - 6, y - 6);
+    ctx.lineTo(x + 6, y + 6);
+    ctx.moveTo(x + 6, y - 6);
+    ctx.lineTo(x - 6, y + 6);
+    ctx.stroke();
+  }
+  ctx.restore();
 }

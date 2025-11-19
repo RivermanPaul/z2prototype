@@ -175,6 +175,7 @@ function updateRocksAndParticles() {
       player.attacking = false;
       player.attackTimer = 0;
       player.blockedThisSwing = false;
+      applyPlayerDamage(1);
       exploded = true;
     }
 
@@ -460,6 +461,7 @@ function handleOctorokPlayerInteractions(octorok) {
       player.attacking = false;
       player.attackTimer = 0;
       player.blockedThisSwing = false;
+      applyPlayerDamage(1);
     }
   }
 }
