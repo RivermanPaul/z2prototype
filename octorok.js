@@ -242,6 +242,13 @@ function updateOctorok(octorok) {
     }
     if (octorok.deathTimer === 0) {
       spawnEnemyPoof(octorok.x + octorok.width / 2, octorok.y + octorok.height / 2);
+      spawnCoinFromEnemy(
+        octorok.x,
+        octorok.y,
+        octorok.width,
+        octorok.height,
+        GAME_MODE_SIDE_SCROLL
+      );
       octorok.lifeState = 'dead';
     }
     return;
