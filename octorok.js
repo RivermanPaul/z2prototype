@@ -234,11 +234,6 @@ function updateOctorok(octorok) {
       octorok.vx = 0;
     }
 
-    // Apply light friction so the slide eases out when grounded.
-    if (octorok.onGround) {
-      octorok.vx *= 0.9;
-    }
-
     octorok.vy += octorok.gravity;
     if (octorok.vy > octorok.maxFall) octorok.vy = octorok.maxFall;
 
@@ -253,7 +248,6 @@ function updateOctorok(octorok) {
       }
       octorok.vy = 0;
       octorok.onGround = true;
-      octorok.vx = 0;
     }
 
     // Fade away after the brief death timer expires.

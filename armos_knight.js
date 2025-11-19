@@ -76,7 +76,6 @@ function updateArmosKnight(knight) {
     knight.vy += knight.gravity;
     knight.x += knight.vx;
     knight.y += knight.vy;
-    knight.vx *= 0.92;
 
     // Stop falling once he returns to the ground plane.
     if (knight.y >= knight.groundY) {
