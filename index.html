@@ -745,6 +745,128 @@
 
   const rocks = [];
   const particles = [];
+  const coins = [];
+
+  // Spawn a bouncing coin at the defeated enemy's position so Link can collect it.
+  function spawnCoinFromEnemy(x, y, width, height, mode, groundZ = null) {
+    const size = Math.floor(TILE_SIZE * 0.7);
+    const spawnX = x + width / 2 - size / 2;
+    const spawnY = y + height / 2 - size / 2;
+    const horizontalKick = (Math.random() * 1.5 + 0.5) * (Math.random() < 0.5 ? -1 : 1);
+    coins.push({
+      x: spawnX,
+      y: spawnY,
+      z: mode === GAME_MODE_RAISED ? (groundZ ?? spawnY) : null,
+      width: size,
+      height: size,
+      vx: horizontalKick,
+      vy: -5.4,
+      gravity: 0.35,
+      maxFall: 8,
+      bouncesRemaining: 4,
+      mode,
+      collected: false
+    });
+  }
+
+  // Advance active coins so they bounce off the scenery and wait for Link to grab them.
+  function updateCoins(activeMode) {
+    for (const coin of coins) {
+      // Skip coins that belong to another scene or were already picked up.
+      if (coin.mode !== activeMode || coin.collected) continue;
+
+      coin.vy = Math.min(coin.vy + coin.gravity, coin.maxFall);
+
+      // Apply horizontal motion with collision checks tailored to the current mode.
+      if (activeMode === GAME_MODE_SIDE_SCROLL) {
+        const proposedX = coin.x + coin.vx;
+        // Bounce off walls instead of letting the coin sink into them.
+        if (!rectVsWorld(proposedX, coin.y, coin.width, coin.height)) {
+          coin.x = proposedX;
+        } else {
+          coin.vx *= -0.55;
+        }
+
+        const proposedY = coin.y + coin.vy;
+        if (!rectVsWorld(coin.x, proposedY, coin.width, coin.height)) {
+          coin.y = proposedY;
+        } else {
+          // Slide to the ground/ceiling edge before reversing direction so the bounce feels crisp.
+          if (coin.vy > 0) {
+            while (!rectVsWorld(coin.x, coin.y + 1, coin.width, coin.height)) {
+              coin.y += 1;
+            }
+          } else if (coin.vy < 0) {
+            while (!rectVsWorld(coin.x, coin.y - 1, coin.width, coin.height)) {
+              coin.y -= 1;
+            }
+          }
+          coin.vy = -Math.abs(coin.vy) * 0.65;
+          coin.vx *= 0.9;
+          coin.bouncesRemaining--;
+          if (Math.abs(coin.vy) < 0.5) {
+            coin.vy = 0;
+          }
+        }
+      } else {
+        const areaWidth = (townState.inShop ? SHOP_COLS : TOWN_AREA_COLS) * TILE_SIZE;
+        const proposedX = coin.x + coin.vx;
+        const blockedInTown =
+          proposedX < 0 ||
+          proposedX + coin.width > areaWidth ||
+          townRectVsWorld(proposedX, coin.z ?? coin.y, coin.width, coin.height);
+        // Reverse direction when hitting buildings or plaza edges.
+        if (!blockedInTown) {
+          coin.x = proposedX;
+        } else {
+          coin.vx *= -0.5;
+        }
+
+        coin.y += coin.vy;
+        const groundY = coin.z ?? coin.y;
+        if (coin.y >= groundY) {
+          coin.y = groundY;
+          coin.vy = -Math.abs(coin.vy) * 0.6;
+          coin.vx *= 0.9;
+          coin.bouncesRemaining--;
+          if (Math.abs(coin.vy) < 0.45) {
+            coin.vy = 0;
+          }
+        }
+      }
+
+      // Apply gentle horizontal friction so coins eventually settle on the ground.
+      coin.vx *= 0.98;
+
+      const playerBox = { x: player.x, y: player.y, width: player.width, height: player.height };
+      // Remove the coin immediately when Link touches it.
+      if (rectsOverlap(playerBox, coin)) {
+        coin.collected = true;
+      }
+    }
+
+    // Cull collected coins from the shared list.
+    for (let i = coins.length - 1; i >= 0; i--) {
+      if (coins[i].collected) {
+        coins.splice(i, 1);
+      }
+    }
+  }
+
+  // Render all active coins for the current scene using a simple gold palette.
+  function drawCoins(activeMode) {
+    for (const coin of coins) {
+      // Skip any coins that don't belong to the active renderer.
+      if (coin.mode !== activeMode || coin.collected) continue;
+
+      const drawX = Math.floor(coin.x - cameraX);
+      const drawY = Math.floor(coin.y);
+      ctx.fillStyle = '#f7d354';
+      ctx.fillRect(drawX, drawY, coin.width, coin.height);
+      ctx.fillStyle = '#c99a2e';
+      ctx.fillRect(drawX + 2, drawY + 2, Math.max(2, coin.width - 4), Math.max(2, coin.height - 4));
+    }
+  }
 
   // Input
   const keys = {
@@ -1890,12 +2012,14 @@
     }
 
     updateRocksAndParticles();
+    updateCoins(GAME_MODE_SIDE_SCROLL);
 
     // Clear
     ctx.fillStyle = '#202048';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     drawWorld();
+    drawCoins(GAME_MODE_SIDE_SCROLL);
     drawPlayer();
 
     // Render each active octorok.
@@ -1948,6 +2072,7 @@
     }
 
     updateTownParticles();
+    updateCoins(GAME_MODE_RAISED);
 
     ctx.fillStyle = '#1b1b34';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1959,6 +2084,7 @@
         drawTownSpearman(spearman);
       }
     }
+    drawCoins(GAME_MODE_RAISED);
     drawTownParticles();
     drawPlayer();
   }

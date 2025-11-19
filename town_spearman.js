@@ -47,6 +47,14 @@ function updateTownSpearman(spearman) {
       // Emit a tiny poof the first frame he touches down after being struck.
       if (!spearman.poofed) {
         spawnTownPoof(spearman.x + spearman.width / 2, spearman.y + spearman.height / 2);
+        spawnCoinFromEnemy(
+          spearman.x,
+          spearman.z,
+          spearman.width,
+          spearman.height,
+          GAME_MODE_RAISED,
+          spearman.z
+        );
         spearman.poofed = true;
       }
       // Remove the enemy after the effect plays.

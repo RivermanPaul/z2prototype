@@ -89,6 +89,13 @@ function updateArmosKnight(knight) {
     }
     if (knight.deathTimer === 0) {
       spawnEnemyPoof(knight.x + knight.width / 2, knight.y + knight.height / 2);
+      spawnCoinFromEnemy(
+        knight.x,
+        knight.y,
+        knight.width,
+        knight.height,
+        GAME_MODE_SIDE_SCROLL
+      );
       knight.lifeState = 'dead';
     }
     return;
