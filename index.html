@@ -210,6 +210,7 @@
 <script src="octorok.js"></script>
 <script src="armos_knight.js"></script>
 <script src="town_spearman.js"></script>
+<script src="shop.js"></script>
 
 <script>
   // Prevent browser UI gestures (scrolling, pinch-zoom, etc.) from interrupting gameplay.
@@ -279,7 +280,6 @@
   // Shop interior width: one screen wide so stores feel cozy and do not scroll.
   const SHOP_COLS = SCREEN_COLS;
   const SHOP_WIDTH = SHOP_COLS * TILE_SIZE;
-  const SHOP_HEART_PRICE = 3;
   // Column indices for the shop doorways in each town plaza area so Link can enter the interiors.
   // Move the left plaza's shop door a few tiles left so it sits centered on the building block.
   const TOWN_SHOP_DOOR_COLS = [12, 10];
@@ -444,45 +444,6 @@
       townAreaCache.set(areaIndex, generateTownAreaTiles(areaIndex));
     }
     return townAreaCache.get(areaIndex);
-  }
-
-  // Produce a simple shop interior layout for the requested shop index.
-  function generateTownShopAreaTiles(shopIndex) {
-    const tiles = [];
-    for (let y = 0; y < WORLD_ROWS; y++) {
-      const row = [];
-      for (let x = 0; x < SHOP_COLS; x++) {
-        let value = 0;
-        // Solid ceiling.
-        if (y === 0) {
-          value = 1;
-        }
-        // Solid side walls to keep Link inside the shop bounds.
-        if (x === 0 || x === SHOP_COLS - 1) {
-          value = 1;
-        }
-        // Solid floor everywhere except for the doorway gap at the bottom center.
-        if (y === WORLD_ROWS - 1) {
-          const exitDoorCenter = Math.floor(SHOP_COLS / 2);
-          const inDoorway = x >= exitDoorCenter - 1 && x <= exitDoorCenter + 1;
-          if (!inDoorway) {
-            value = 1;
-          }
-        }
-        row.push(value);
-      }
-      tiles.push(row);
-    }
-
-    return tiles;
-  }
-
-  // Return (and lazily build) the tile array for the requested shop interior index.
-  function getTownShopAreaTiles(shopIndex) {
-    if (!townShopAreaCache.has(shopIndex)) {
-      townShopAreaCache.set(shopIndex, generateTownShopAreaTiles(shopIndex));
-    }
-    return townShopAreaCache.get(shopIndex);
   }
 
   // Return the list of area indices that overlap the current camera view (with padding for nearby rooms).
@@ -744,13 +705,6 @@
     inShop: false,
     // Index of the shop interior currently occupied so exits can return to the correct plaza.
     shopIndex: 0
-  };
-
-  // Per-visit shop data so temporary wares can disappear until Link returns.
-  const shopVisitState = {
-    heartAvailable: false,
-    heartPulse: 0,
-    heartPurchaseTimer: 0
   };
 
   // Reset Link's side-view pose when returning from the overworld.
@@ -1034,51 +988,6 @@
     }
   }
 
-  function shopHeartBox() {
-    const heartSize = TILE_SIZE;
-    const heartX = SHOP_WIDTH / 2 - heartSize / 2;
-    // Lift the heart display into the middle of the shop so it sits away from the doorway.
-    const heartY = TOWN_GROUND_Z - heartSize * 5;
-    return { x: heartX, y: heartY, width: heartSize, height: heartSize * 1.2 };
-  }
-
-  function spawnShopHeartBurst(x, y) {
-    const count = 10;
-    for (let i = 0; i < count; i++) {
-      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.3;
-      const speed = 0.8 + Math.random() * 0.6;
-      townParticles.push({
-        x,
-        y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed * 0.6 - 0.2,
-        life: 24,
-        color: 'rgba(255, 120, 160, 0.9)'
-      });
-    }
-  }
-
-  function updateShopHeart() {
-    if (!townState.inShop) return;
-
-    shopVisitState.heartPulse = (shopVisitState.heartPulse + 1) % 240;
-    if (shopVisitState.heartPurchaseTimer > 0) {
-      shopVisitState.heartPurchaseTimer--;
-    }
-
-    if (!shopVisitState.heartAvailable) return;
-
-    const heart = shopHeartBox();
-    const playerBox = { x: player.x, y: player.y, width: player.width, height: player.height };
-    if (rectsOverlap(playerBox, heart) && player.coins >= SHOP_HEART_PRICE) {
-      player.coins -= SHOP_HEART_PRICE;
-      resetPlayerVitals();
-      shopVisitState.heartAvailable = false;
-      shopVisitState.heartPurchaseTimer = 24;
-      spawnShopHeartBurst(heart.x + heart.width / 2, heart.y + heart.height / 2);
-    }
-  }
-
   // Input
   const keys = {
     w: false,
@@ -1149,9 +1058,7 @@
     townState.areaIndex = 0;
     townState.inShop = false;
     townState.shopIndex = 0;
-    shopVisitState.heartAvailable = false;
-    shopVisitState.heartPulse = 0;
-    shopVisitState.heartPurchaseTimer = 0;
+    resetShopState();
     gameMode = GAME_MODE_SIDE_SCROLL;
     resetSideViewPlayerPosition();
     player.coins = 0;
@@ -1858,9 +1765,7 @@
       ) {
         townState.inShop = true;
         townState.shopIndex = townState.areaIndex;
-        shopVisitState.heartAvailable = true;
-        shopVisitState.heartPulse = 0;
-        shopVisitState.heartPurchaseTimer = 0;
+        startShopVisit();
         // Place Link just inside the interior doorway so he appears close to the entrance.
         const exitDoorCenter = Math.floor(SHOP_COLS / 2);
         player.x = exitDoorCenter * TILE_SIZE - player.width / 2;
@@ -1995,53 +1900,6 @@
     ctx.fillRect(Math.floor(x + size * 0.55), Math.floor(y), Math.floor(size * 0.35), Math.floor(half));
   }
 
-  function drawShopKeeper() {
-    const keeperWidth = TILE_SIZE;
-    const keeperHeight = Math.floor(TILE_SIZE * 1.5);
-    const keeperX = SHOP_WIDTH / 2 - keeperWidth / 2 - cameraX;
-    const keeperY = TILE_SIZE * 2;
-    const bob = Math.sin(shopVisitState.heartPulse / 12) * 2;
-    ctx.fillStyle = '#d8aa5a';
-    ctx.fillRect(Math.floor(keeperX), Math.floor(keeperY + bob), keeperWidth, keeperHeight);
-    ctx.fillStyle = '#8b5a2b';
-    ctx.fillRect(Math.floor(keeperX), Math.floor(keeperY + bob), keeperWidth, 4);
-    ctx.fillStyle = '#4a3218';
-    ctx.fillRect(Math.floor(keeperX + keeperWidth * 0.2), Math.floor(keeperY + bob + keeperHeight - 6), keeperWidth * 0.6, 6);
-  }
-
-  function drawShopHeartDisplay() {
-    const heart = shopHeartBox();
-    const baseSize = heart.width;
-    const pulseScale = 1 + (Math.sin(shopVisitState.heartPulse / 10) * 0.08);
-    const drawSize = baseSize * pulseScale;
-    const drawX = heart.x - cameraX + (baseSize - drawSize) / 2;
-    const drawY = heart.y + (baseSize - drawSize) / 2;
-
-    if (shopVisitState.heartAvailable || shopVisitState.heartPurchaseTimer > 0) {
-      const visible = shopVisitState.heartAvailable || shopVisitState.heartPurchaseTimer > 8;
-      if (visible) {
-        for (let i = 0; i < 3; i++) {
-          const offsetX = drawX + i * (drawSize * 0.5);
-          const color = shopVisitState.heartAvailable ? '#ff6b81' : 'rgba(120, 120, 140, 0.7)';
-          drawHeartShape(offsetX, drawY, drawSize * 0.6, color);
-        }
-      }
-    }
-
-    const priceY = heart.y + heart.height + 6;
-    const priceX = heart.x - cameraX - 4;
-    const canAfford = player.coins >= SHOP_HEART_PRICE;
-    ctx.fillStyle = canAfford && shopVisitState.heartAvailable ? '#ffffff' : '#c0b0d0';
-    ctx.font = '12px monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText(`x${SHOP_HEART_PRICE}`, priceX + 14, priceY);
-    ctx.fillStyle = '#f7d354';
-    ctx.fillRect(priceX, priceY + 2, 10, 10);
-    ctx.fillStyle = '#c99a2e';
-    ctx.fillRect(priceX + 2, priceY + 4, 6, 6);
-  }
-
   // Render the raised-view town tiles relative to the current camera offset.
   function drawTownWorld() {
     const startTileX = Math.floor(cameraX / TILE_SIZE);
@@ -2076,8 +1934,7 @@
       ctx.fillStyle = '#000000';
       ctx.fillRect(Math.floor(doorX), Math.floor(doorY), TILE_SIZE * 2, doorHeight);
     } else {
-      drawShopKeeper();
-      drawShopHeartDisplay();
+      drawShopInterior();
     }
     // Render connector debug info so we can inspect how segments resolve in real time.
     if (debugTownConnectorInfo) {
@@ -2459,7 +2316,7 @@
     if (exitedTown) return;
 
     updateTownCamera();
-    updateShopHeart();
+    updateShopItems();
 
     // Update each spearman patrol when outdoors and resolve any collisions against Link.
     if (!townState.inShop) {
