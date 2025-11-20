@@ -279,6 +279,42 @@
     shop: createSoundEffect('audio/shop.wav', 0.5)
   };
 
+  // Track whether the browser has granted permission for programmatic audio playback.
+  let audioUnlocked = false;
+
+  // Prime the audio elements on the first user interaction so browsers with autoplay blocks allow later sounds.
+  function unlockAudioPlayback() {
+    // Skip when audio already unlocked to avoid unnecessary work.
+    if (audioUnlocked) return;
+    // Try to start a muted instance of every effect so the gesture unlocks audio playback.
+    Object.values(soundEffects).forEach((sound) => {
+      const instance = sound.cloneNode();
+      instance.volume = 0;
+      const playPromise = instance.play();
+      // Mark audio as unlocked once any muted play succeeds, then clean up the temporary instance.
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise.then(() => {
+          // Abort repeated cleanup if another promise already unlocked audio.
+          if (audioUnlocked) return;
+          audioUnlocked = true;
+          instance.pause();
+          instance.currentTime = 0;
+          window.removeEventListener('pointerdown', unlockAudioPlayback);
+          window.removeEventListener('keydown', unlockAudioPlayback);
+        }).catch(() => {});
+      } else {
+        // Assume legacy browsers unlocked audio after attempting to play the muted clip.
+        audioUnlocked = true;
+        window.removeEventListener('pointerdown', unlockAudioPlayback);
+        window.removeEventListener('keydown', unlockAudioPlayback);
+      }
+    });
+  }
+
+  // Listen for the first pointer or keyboard gesture so audio can be primed before gameplay starts.
+  window.addEventListener('pointerdown', unlockAudioPlayback);
+  window.addEventListener('keydown', unlockAudioPlayback);
+
   // Play a short sound effect by key, cloning the base audio so overlapping events do not cut each other off.
   function playSoundEffect(key) {
     const sound = soundEffects[key];
