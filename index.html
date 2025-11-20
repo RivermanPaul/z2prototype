@@ -1052,7 +1052,7 @@
     randomBattleState.octoroks = [];
     randomBattleState.knights = [];
     randomBattleState.areaIndex = 3000;
-    initOverworld(TILE_SIZE);
+    initOverworld();
     townState.entryTile = { x: 17, y: 6 };
     townState.entrySide = 'left';
     townState.areaIndex = 0;
@@ -1314,7 +1314,7 @@
   }
 
   // Initialize the overworld module now that the shared tile size is known.
-  initOverworld(TILE_SIZE);
+  initOverworld();
 
   // Look up the tile index inside the raised-view town at the requested tile coordinate.
   function townTileAtTileCoordinates(tileX, tileY) {

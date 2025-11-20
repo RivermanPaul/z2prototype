@@ -7,8 +7,8 @@ let overworldState;
 // Cache of overworld tiles that represent the town entrance so we can map exits back to each side.
 let townEntranceTiles;
 
-// Initialize the overworld layout and backing state using the shared tile size.
-function initOverworld(tileSize) {
+// Initialize the overworld layout and scale the view to fill the canvas.
+function initOverworld() {
   // Define the top-down overworld tile grid so moving left of the starting room switches engines.
   // The lake and town are mirrored toward the right side of the map so the water opens to the east.
   overworldLayout = [
@@ -26,12 +26,24 @@ function initOverworld(tileSize) {
     'MMMMMMMMMMMMMMMMMMM'
   ];
 
+  // Compute a scaled tile size that lets the overworld fill as much of the canvas as possible.
+  const scaledTileSize = Math.floor(
+    Math.min(canvas.width / overworldLayout[0].length, canvas.height / overworldLayout.length)
+  );
+  // Center the overworld view inside the canvas so it mirrors the side-scrolling presentation.
+  const viewWidth = overworldLayout[0].length * scaledTileSize;
+  const viewHeight = overworldLayout.length * scaledTileSize;
+  const viewOffsetX = Math.floor((canvas.width - viewWidth) / 2);
+  const viewOffsetY = Math.floor((canvas.height - viewHeight) / 2);
+
   // Track overworld state independently from the side-scrolling engine.
   overworldState = {
-    tileSize,
+    tileSize: scaledTileSize,
     map: overworldLayout,
     width: overworldLayout[0].length,
     height: overworldLayout.length,
+    viewOffsetX,
+    viewOffsetY,
     playerTileX: overworldLayout[0].length - 2,
     playerTileY: 6,
     moving: false,
@@ -486,8 +498,8 @@ function drawOverworld() {
     // Walk every column of the current row to lay down its tile color.
     for (let x = 0; x < overworldState.width; x++) {
       const tile = overworldState.map[y][x];
-      const px = x * overworldState.tileSize + TILE_SIZE * 2;
-      const py = y * overworldState.tileSize + TILE_SIZE * 2;
+      const px = overworldState.viewOffsetX + x * overworldState.tileSize;
+      const py = overworldState.viewOffsetY + y * overworldState.tileSize;
       // Choose a fill color that matches the tile's terrain type.
       if (tile === 'G') {
         ctx.fillStyle = '#7bb858';
@@ -526,8 +538,8 @@ function drawOverworld() {
     const enemyBaseY = enemy.tileY * overworldState.tileSize;
     const enemyOffsetX = enemy.moving ? (enemy.moveTo.x - enemy.moveFrom.x) * overworldState.tileSize * enemyProgress : 0;
     const enemyOffsetY = enemy.moving ? (enemy.moveTo.y - enemy.moveFrom.y) * overworldState.tileSize * enemyProgress : 0;
-    const drawX = TILE_SIZE * 2 + enemyBaseX + enemyOffsetX;
-    const drawY = TILE_SIZE * 2 + enemyBaseY + enemyOffsetY;
+    const drawX = overworldState.viewOffsetX + enemyBaseX + enemyOffsetX;
+    const drawY = overworldState.viewOffsetY + enemyBaseY + enemyOffsetY;
     ctx.fillStyle = enemy.type === 'beast' ? '#b44747' : '#7c6de6';
     ctx.fillRect(drawX + 4, drawY + 4, overworldState.tileSize - 8, overworldState.tileSize - 8);
     ctx.fillStyle = enemy.type === 'beast' ? '#6b2020' : '#4433aa';
@@ -546,8 +558,8 @@ function drawOverworld() {
   const targetOffsetY = overworldState.moving
     ? (overworldState.moveTo.y - overworldState.moveFrom.y) * overworldState.tileSize
     : 0;
-  const playerDrawX = TILE_SIZE * 2 + baseX + targetOffsetX * progress;
-  const playerDrawY = TILE_SIZE * 2 + baseY + targetOffsetY * progress;
+  const playerDrawX = overworldState.viewOffsetX + baseX + targetOffsetX * progress;
+  const playerDrawY = overworldState.viewOffsetY + baseY + targetOffsetY * progress;
 
   // Render Link as a tiny adventurer sprite with a directional arrow to hint at facing.
   ctx.fillStyle = '#2f9e44';
