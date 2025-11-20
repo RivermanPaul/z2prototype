@@ -281,34 +281,44 @@
 
   // Track whether the browser has granted permission for programmatic audio playback.
   let audioUnlocked = false;
+  // Shared Web Audio context to help browsers that require an explicit resume gesture.
+  const audioContext = 'AudioContext' in window ? new AudioContext() : null;
 
   // Prime the audio elements on the first user interaction so browsers with autoplay blocks allow later sounds.
   function unlockAudioPlayback() {
     // Skip when audio already unlocked to avoid unnecessary work.
     if (audioUnlocked) return;
-    // Try to start a muted instance of every effect so the gesture unlocks audio playback.
+    audioUnlocked = true;
+
+    // Resume the shared audio context if the browser suspended it before interaction.
+    if (audioContext && audioContext.state === 'suspended') {
+      audioContext.resume().catch(() => {});
+    }
+
+    // Play a muted blip of every effect so the user gesture unlocks each media element.
     Object.values(soundEffects).forEach((sound) => {
-      const instance = sound.cloneNode();
-      instance.volume = 0;
-      const playPromise = instance.play();
-      // Mark audio as unlocked once any muted play succeeds, then clean up the temporary instance.
+      sound.muted = true;
+      sound.currentTime = 0;
+      const playPromise = sound.play();
       if (playPromise && typeof playPromise.then === 'function') {
         playPromise.then(() => {
-          // Abort repeated cleanup if another promise already unlocked audio.
-          if (audioUnlocked) return;
-          audioUnlocked = true;
-          instance.pause();
-          instance.currentTime = 0;
-          window.removeEventListener('pointerdown', unlockAudioPlayback);
-          window.removeEventListener('keydown', unlockAudioPlayback);
-        }).catch(() => {});
+          sound.pause();
+          sound.currentTime = 0;
+          sound.muted = false;
+        }).catch(() => {
+          sound.currentTime = 0;
+          sound.muted = false;
+        });
       } else {
-        // Assume legacy browsers unlocked audio after attempting to play the muted clip.
-        audioUnlocked = true;
-        window.removeEventListener('pointerdown', unlockAudioPlayback);
-        window.removeEventListener('keydown', unlockAudioPlayback);
+        sound.pause();
+        sound.currentTime = 0;
+        sound.muted = false;
       }
     });
+
+    // Remove the unlock listeners once audio has been successfully primed.
+    window.removeEventListener('pointerdown', unlockAudioPlayback);
+    window.removeEventListener('keydown', unlockAudioPlayback);
   }
 
   // Listen for the first pointer or keyboard gesture so audio can be primed before gameplay starts.
@@ -319,9 +329,16 @@
   function playSoundEffect(key) {
     const sound = soundEffects[key];
     if (!sound) return;
+    // Best-effort unlock if something managed to trigger playback before the first gesture.
+    if (!audioUnlocked) {
+      unlockAudioPlayback();
+    }
     const instance = sound.cloneNode();
     instance.volume = sound.volume;
-    instance.play();
+    const playPromise = instance.play();
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch(() => {});
+    }
   }
 
   // World / tile setup
