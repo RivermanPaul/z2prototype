@@ -96,6 +96,7 @@ function spawnShopHeartBurst(x, y) {
 
 // Apply the healing payload for the purchased item and clear its availability for the rest of the visit.
 function resolveShopPurchase(item, itemState, box) {
+  playSoundEffect('shop');
   if (item.heal === 'full') {
     resetPlayerVitals();
   } else {

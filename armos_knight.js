@@ -64,6 +64,7 @@ function startArmosKnightDeath(knight, knockDir = 0) {
   const launchDir = knockDir !== 0 ? knockDir : knight.facing;
   knight.vx = launchDir * 2.4;
   knight.vy = -5.5;
+  playSoundEffect('enemyDefeat');
 }
 
 // Advance the Armos Knight's idle, shield, and attack timers.
@@ -302,9 +303,11 @@ function handleArmosKnightVsPlayer(knight) {
       knight.hp--;
       // Launch a death animation once health reaches zero.
       if (knight.hp <= 0) {
+        playSoundEffect('enemyDefeat');
         startArmosKnightDeath(knight, player.facing);
         return;
       }
+      playSoundEffect('enemyHit');
       knight.hitTimer = 14;
       const knockDir = player.facing;
       knight.vx = knockDir * 2.5;
@@ -312,6 +315,7 @@ function handleArmosKnightVsPlayer(knight) {
     } else if (swordBlocked && !player.blockedThisSwing) {
       // Recoil Link slightly when the shield successfully blocks the strike.
       const recoilDir = player.facing;
+      playSoundEffect('block');
       player.x -= recoilDir * 1.5;
       player.vx = -recoilDir * 2.0;
       player.vy = Math.min(player.vy, -1);

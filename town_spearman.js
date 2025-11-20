@@ -156,6 +156,7 @@ function handleTownSpearmanVsPlayer(spearman) {
     const awayFromPlayer = Math.sign(spearmanCenter - playerCenter) || 1;
     spearman.vx = awayFromPlayer * 3.2;
     spearman.vy = -5;
+    playSoundEffect('enemyDefeat');
     return;
   }
 
