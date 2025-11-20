@@ -259,6 +259,35 @@
   const GAME_MODE_RAISED = 'raised';
   let gameMode = GAME_MODE_SIDE_SCROLL;
 
+  // Build a preloaded audio element for the requested source path so sound effects are ready immediately.
+  function createSoundEffect(src, volume = 1) {
+    const audio = new Audio(src);
+    audio.preload = 'auto';
+    audio.volume = volume;
+    return audio;
+  }
+
+  // Central library of short feedback cues reused across combat, traversal, and UI events.
+  const soundEffects = {
+    sword: createSoundEffect('audio/sword.wav', 0.4),
+    jump: createSoundEffect('audio/jump.wav', 0.35),
+    hurt: createSoundEffect('audio/hurt.wav', 0.45),
+    enemyHit: createSoundEffect('audio/enemy_hit.wav', 0.45),
+    enemyDefeat: createSoundEffect('audio/enemy_defeat.wav', 0.4),
+    coin: createSoundEffect('audio/coin.wav', 0.35),
+    block: createSoundEffect('audio/block.wav', 0.4),
+    shop: createSoundEffect('audio/shop.wav', 0.5)
+  };
+
+  // Play a short sound effect by key, cloning the base audio so overlapping events do not cut each other off.
+  function playSoundEffect(key) {
+    const sound = soundEffects[key];
+    if (!sound) return;
+    const instance = sound.cloneNode();
+    instance.volume = sound.volume;
+    instance.play();
+  }
+
   // World / tile setup
   const TILE_SIZE = 16;
   const WORLD_ROWS = Math.floor(canvas.height / TILE_SIZE);
@@ -962,6 +991,7 @@
       if (rectsOverlap(playerBox, coin)) {
         coin.collected = true;
         player.coins += 1;
+        playSoundEffect('coin');
       }
     }
 
@@ -1012,7 +1042,11 @@
 
   function applyPlayerDamage(amount = 1) {
     if (gameOverState.active || player.hp <= 0) return;
+    const previousHp = player.hp;
     player.hp = Math.max(0, player.hp - amount);
+    if (player.hp < previousHp) {
+      playSoundEffect('hurt');
+    }
     if (player.hp === 0) {
       triggerGameOver();
     }
@@ -1526,6 +1560,7 @@
     if (jumpJustPressed && player.onGround && !player.attacking && player.hitTimer === 0) {
       player.vy = player.jumpSpeed;
       player.onGround = false;
+      playSoundEffect('jump');
     }
 
     // Gravity
@@ -1578,6 +1613,7 @@
       player.attacking = true;
       player.attackTimer = 0;
       player.blockedThisSwing = false;
+      playSoundEffect('sword');
     }
 
     // Count through the attack animation frames.
@@ -1669,6 +1705,7 @@
     if (jumpJustPressed && player.onGround && !player.attacking && player.hitTimer === 0) {
       player.onGround = false;
       player.vy = player.jumpSpeed;
+      playSoundEffect('jump');
     }
 
     // Apply gravity and vertical movement when airborne while keeping depth locked.
@@ -1828,6 +1865,7 @@
       player.attacking = true;
       player.attackTimer = 0;
       player.blockedThisSwing = false;
+      playSoundEffect('sword');
     }
 
     // Count through the attack animation frames when active.

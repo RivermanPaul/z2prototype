@@ -163,6 +163,7 @@ function updateRocksAndParticles() {
     let exploded = false;
     // Shield blocks the rock
     if (rectsOverlap(rockBox, shieldBox)) {
+      playSoundEffect('block');
       exploded = true;
     } else if (rectsOverlap(rockBox, playerBox) && player.hitTimer === 0) {
       // Hit the player
@@ -415,6 +416,7 @@ function handleOctorokPlayerInteractions(octorok) {
     octorok.hp--;
     // Play a brief hit flash whenever health remains.
     if (octorok.hp > 0) {
+      playSoundEffect('enemyHit');
       octorok.hitTimer = 10;
       const knockDir = player.facing;
       octorok.vx = 3 * knockDir;
@@ -423,6 +425,7 @@ function handleOctorokPlayerInteractions(octorok) {
       const playerCenter = player.x + player.width / 2;
       const octorokCenter = octorok.x + octorok.width / 2;
       const awayFromPlayer = Math.sign(octorokCenter - playerCenter) || 1;
+      playSoundEffect('enemyDefeat');
       startOctorokDeath(octorok, awayFromPlayer);
     }
   }
