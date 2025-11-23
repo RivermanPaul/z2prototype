@@ -259,12 +259,39 @@
   const GAME_MODE_RAISED = 'raised';
   let gameMode = GAME_MODE_SIDE_SCROLL;
 
-  // Build a preloaded audio element for the requested source path so sound effects are ready immediately.
+  // Detect Web Audio availability so we can favor low-latency playback on mobile browsers.
+  const audioContext = typeof window !== 'undefined' && 'AudioContext' in window
+    ? new AudioContext()
+    : null;
+
+  // Build a reusable audio descriptor that supports both DOM audio and Web Audio playback paths.
   function createSoundEffect(src, volume = 1) {
     const audio = new Audio(src);
     audio.preload = 'auto';
     audio.volume = volume;
-    return audio;
+    const effect = {
+      src,
+      volume,
+      audio,
+      buffer: null,
+      bufferPromise: null
+    };
+    // Preload a decoded buffer for Web Audio when supported so playback stays smooth on mobile hardware.
+    if (audioContext && typeof fetch === 'function') {
+      effect.bufferPromise = fetch(src)
+        .then((response) => response.arrayBuffer())
+        .then((data) => audioContext.decodeAudioData(data))
+        .then((buffer) => {
+          effect.buffer = buffer;
+          return buffer;
+        })
+        .catch((err) => {
+          console.warn('Failed to decode sound effect %s:', src, err);
+          effect.bufferPromise = null;
+          effect.buffer = null;
+        });
+    }
+    return effect;
   }
 
   // Central library of short feedback cues reused across combat, traversal, and UI events.
@@ -281,8 +308,6 @@
 
   // Track whether the browser has granted permission for programmatic audio playback.
   let audioUnlocked = false;
-  // Shared Web Audio context to help browsers that require an explicit resume gesture.
-  const audioContext = 'AudioContext' in window ? new AudioContext() : null;
 
   // Prime the audio elements on the first user interaction so browsers with autoplay blocks allow later sounds.
   function unlockAudioPlayback() {
@@ -295,24 +320,26 @@
       audioContext.resume().catch(() => {});
     }
 
-    // Play a muted blip of every effect so the user gesture unlocks each media element.
+    // Play a muted blip of every DOM audio element so the user gesture unlocks each media element.
     Object.values(soundEffects).forEach((sound) => {
-      sound.muted = true;
-      sound.currentTime = 0;
-      const playPromise = sound.play();
+      const baseAudio = sound.audio;
+      if (!baseAudio) return;
+      baseAudio.muted = true;
+      baseAudio.currentTime = 0;
+      const playPromise = baseAudio.play();
       if (playPromise && typeof playPromise.then === 'function') {
         playPromise.then(() => {
-          sound.pause();
-          sound.currentTime = 0;
-          sound.muted = false;
+          baseAudio.pause();
+          baseAudio.currentTime = 0;
+          baseAudio.muted = false;
         }).catch(() => {
-          sound.currentTime = 0;
-          sound.muted = false;
+          baseAudio.currentTime = 0;
+          baseAudio.muted = false;
         });
       } else {
-        sound.pause();
-        sound.currentTime = 0;
-        sound.muted = false;
+        baseAudio.pause();
+        baseAudio.currentTime = 0;
+        baseAudio.muted = false;
       }
     });
 
@@ -325,6 +352,18 @@
   window.addEventListener('pointerdown', unlockAudioPlayback);
   window.addEventListener('keydown', unlockAudioPlayback);
 
+  // Attempt to play a buffered Web Audio clip; returns true when playback succeeded.
+  function playWebAudioBuffer(effect) {
+    if (!audioContext || !effect.buffer) return false;
+    const bufferSource = audioContext.createBufferSource();
+    bufferSource.buffer = effect.buffer;
+    const gainNode = audioContext.createGain();
+    gainNode.gain.value = effect.volume;
+    bufferSource.connect(gainNode).connect(audioContext.destination);
+    bufferSource.start(0);
+    return true;
+  }
+
   // Play a short sound effect by key, cloning the base audio so overlapping events do not cut each other off.
   function playSoundEffect(key) {
     const sound = soundEffects[key];
@@ -333,7 +372,14 @@
     if (!audioUnlocked) {
       unlockAudioPlayback();
     }
-    const instance = sound.cloneNode();
+    // Favor the low-latency Web Audio path on mobile whenever the decoded buffer is ready.
+    if (playWebAudioBuffer(sound)) {
+      return;
+    }
+    // Fall back to DOM audio so the sound still plays while decoding finishes or when Web Audio is unavailable.
+    const baseAudio = sound.audio;
+    if (!baseAudio) return;
+    const instance = baseAudio.cloneNode();
     instance.volume = sound.volume;
     const playPromise = instance.play();
     if (playPromise && typeof playPromise.catch === 'function') {
